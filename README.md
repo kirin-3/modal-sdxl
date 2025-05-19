@@ -59,7 +59,7 @@ A powerful and flexible text-to-image generation system built with [Modal](https
    # Modal endpoints
    MODAL_ENDPOINT=https://yourusername--text2image-inference-web.modal.run
    
-   # GPU configuration (options include: T4, L4, A10G, A100, H100)
+   # GPU configuration 
    GPU_TYPE=L4
    ```
 
@@ -147,17 +147,6 @@ elif 'application/json' in response.headers.get('content-type', ''):
 
 ## Advanced Configuration
 
-### GPU Selection
-
-You can choose from various GPU types in your `.env` file:
-- `T4`: Most affordable option, good for basic generations
-- `L4`: Good balance of price and performance (default)
-- `A10G`: High performance for faster generations
-- `A100`: Premium performance for complex generations
-- `H100`: Highest performance available
-
-Changing GPU type affects pricing on Modal. See Modal's pricing page for details.
-
 ### Available Models
 
 - Default model: `stabilityai/stable-diffusion-xl-base-1.0`
@@ -177,16 +166,6 @@ The `weight` parameter (0.1-2.0) controls how strongly the LoRA affects the gene
 
 - `euler_ancestral`: Euler Ancestral - Best overall, default choice
 - `dpmpp_2m_karras`: DPM++ 2M Karras - High quality, potentially faster
-
-## Project Architecture
-
-- `text2image.py`: Modal backend application with SDXL pipeline implementation
-- `local_server.py`: Flask server providing the web interface
-- `templates/index.html`: Web UI template
-- `static/css/styles.css`: Styling for the web interface
-- `static/js/script.js`: Client-side JavaScript for the web interface
-- `.env`: Configuration for Modal endpoint URL and GPU type
-- `example.env`: Example configuration template
 
 ## Troubleshooting
 
