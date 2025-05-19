@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SDXL Image Generator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- Prompt History Panel -->
+        <div id="history-panel">
+            <div class="history-panel-header">
+                <h3>Prompt History</h3>
+                <button id="history-close-btn" class="history-close-btn" aria-label="Close history panel">&times;</button>
+            </div>
+            <div id="prompt-history-container"></div>
+        </div>
+        <!-- Toggle button for history panel -->
+        <div id="history-toggle" title="Prompt History">📋</div>
+        
+        <h1>SDXL Image Generator</h1>
+        
+        {% if error %}
+        <div class="error" role="alert" aria-live="assertive">
+            <span class="sr-only">Error: </span>{{ error }}
+        </div>
+        {% endif %}
+        
+        <!-- Display generated images first (at the top) -->
+        {% if image %}
+        <div class="image-container" id="result">
+            <h2>Generated Images</h2>
+            
+            <!-- Multiple image case - only show gallery -->
+            {% if images and images|length > 1 %}
+            <div>
+                <h3>Generated Images ({{ images|length }} total)</h3>
+                <div class="gallery">
+                    {% for img in images %}
+                    <div class="gallery-item" data-index="{{ loop.index }}">
+                        <img src="data:image/png;base64,{{ img|b64encode }}" alt="Generated image {{ loop.index }}" class="gallery-img" onclick="enlargeImage(this)">
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            <!-- Single image case - show main image -->
+            {% else %}
+            <img src="data:image/png;base64,{{ image|b64encode }}" alt="Generated image">
+            {% endif %}
+            
+            <div class="generation-info">
+                <div class="prompt-display">
+                    <div class="prompt-copy-container">
+                        <h4>Prompt Used:</h4>
+                        <button class="copy-btn" onclick="copyToClipboard('{{ prompt }}')">
+                            <span class="copy-icon">📋</span> Copy Prompt
+                        </button>
+                    </div>
+                    <p class="prompt-text">{{ prompt }}</p>
+                    {% if negative_prompt %}
+                    <div class="prompt-copy-container">
+                        <h4>Negative Prompt:</h4>
+                        <button class="copy-btn" onclick="copyToClipboard('{{ negative_prompt }}')">
+                            <span class="copy-icon">📋</span> Copy Negative
+                        </button>
+                    </div>
+                    <p class="prompt-text negative">{{ negative_prompt }}</p>
+                    {% endif %}
+                </div>
+                <p>
+                    Using model: 
+                    <strong>
+                        {% if is_civitai %}
+                        CivitAI #{{ civitai_id }}
+                        <span class="tag tag-civitai">CivitAI</span>
+                        {% else %}
+                        {{ model_id }}
+                        <span class="tag tag-hf">HF</span>
+                        {% endif %}
+                    </strong>
+                </p>
+                <p>
+                    Settings: {{width}}×{{height}} pixels, {{steps}} steps, guidance scale {{guidance_scale}}
+                    {% if scheduler %}
+                    <br>
+                    Sampler: {{ scheduler_options[scheduler] if scheduler_options and scheduler in scheduler_options else scheduler }}
+                    {% endif %}
+                    {% if batch_size > 1 or batch_count > 1 %}
+                    <br>
+                    Batch: {{batch_size}} images per batch, {{batch_count}} batch(es)
+                    {% endif %}
+                </p>
+                
+                <!-- Show where images were saved -->
+                {% if saved_paths and saved_paths|length > 0 %}
+                <div class="saved-paths">
+                    <p><strong>Images saved to disk:</strong></p>
+                    {% if saved_paths|length == 1 %}
+                        <p style="word-break: break-all;">{{ saved_paths[0] }}</p>
+                    {% else %}
+                        <p>{{ saved_paths|length }} images saved to <strong>{{ output_directory_display }}</strong> folder</p>
+                        <details>
+                            <summary>Show all file paths</summary>
+                            <div>
+                                <ul style="max-height: 150px; overflow-y: auto; text-align: left; margin-top: 10px;">
+                                    {% for path in saved_paths %}
+                                    <li style="word-break: break-all; margin-bottom: 5px;">{{ path }}</li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                        </details>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+        
+        <!-- Modal for enlarged images -->
+        <div id="imageModal" class="modal">
+            <span class="close-modal" onclick="closeModal()">&times;</span>
+            <img class="modal-content" id="enlargedImage">
+        </div>
+        
+        <div class="loading" id="loading">
+            <p>Generating SDXL image... This may take a minute or longer for first-time model downloads.</p>
+        </div>
+        
+        <form method="POST" action="/" id="generate-form">
+            <div class="form-container">
+                <!-- Left column - Prompt and generation settings -->
+                <div class="primary-column">
+                    <div class="panel">
+                        <div class="prompt-container">
+                            <label for="prompt">Positive Prompt:</label>
+                            <textarea id="prompt" name="prompt" required placeholder="A photorealistic landscape, breathtaking vista, 8k, highly detailed">{{ prompt }}</textarea>
+                        </div>
+                        
+                        <div class="prompt-container">
+                            <label for="negative_prompt">Negative Prompt:</label>
+                            <textarea id="negative_prompt" name="negative_prompt" placeholder="cartoon, animation, drawing, low quality, blurry, nsfw">{{ negative_prompt }}</textarea>
+                        </div>
+                        
+                        <!-- Add duplicate Generate button at the top -->
+                        <div style="text-align: center; margin-top: 15px;">
+                            <button type="submit" id="top-generate-btn" class="generate-btn">Generate Image</button>
+                        </div>
+                    </div>
+                    
+                    <div class="panel">
+                        <details open>
+                            <summary>Generation Settings</summary>
+                            <div>
+                                <div>
+                                    <label for="seed">Seed (optional):</label>
+                                    <input type="number" id="seed" name="seed" value="{{ seed }}" placeholder="Leave empty for random seed">
+                                </div>
+                                
+                                <label>Image Dimensions:</label>
+                                <div>
+                                    <div style="margin-bottom: 10px;">
+                                        <span class="dimensions-preset" onclick="setDimensions(1024, 1024)">1024×1024</span>
+                                        <span class="dimensions-preset" onclick="setDimensions(896, 1152)">896×1152</span>
+                                        <span class="dimensions-preset" onclick="setDimensions(1152, 896)">1152×896</span>
+                                        <span class="dimensions-preset" onclick="setDimensions(1216, 832)">1216×832</span>
+                                        <span class="dimensions-preset" onclick="setDimensions(832, 1216)">832×1216</span>
+                                    </div>
+                                    <div class="dimensions-group">
+                                        <div class="dimension-input">
+                                            <label for="width">Width:</label>
+                                            <input type="number" id="width" name="width" value="{{ width }}" min="512" max="2048" step="8" required>
+                                        </div>
+                                        <div class="dimension-input">
+                                            <label for="height">Height:</label>
+                                            <input type="number" id="height" name="height" value="{{ height }}" min="512" max="2048" step="8" required>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <label for="steps">Inference Steps:</label>
+                                    <input type="number" id="steps" name="steps" value="{{ steps }}" min="1" max="100" placeholder="Number of denoising steps">
+                                    <small>More steps = better quality but slower generation. 25-40 steps usually gives good results.</small>
+                                </div>
+                                
+                                <div>
+                                    <label for="guidance_scale">Guidance Scale:</label>
+                                    <input type="number" id="guidance_scale" name="guidance_scale" value="{{ guidance_scale }}" min="1" max="20" step="0.1">
+                                    <small>How closely to follow the prompt. Higher values = more prompt adherence, less variety. Recommended range: 5-9</small>
+                                </div>
+                                
+                                <div>
+                                    <label for="clip_skip">CLIP Skip:</label>
+                                    <input type="number" id="clip_skip" name="clip_skip" value="{{ clip_skip }}" min="1" max="4" step="1" placeholder="Default: 1 (no skip)">
+                                    <small>Skip the last N layers of the CLIP text encoder. Some models work better with specific CLIP skip values. 1 = no skip, usually 2 works best for custom models if needed.</small>
+                                </div>
+                                
+                                <div>
+                                    <label for="scheduler">Sampling Method:</label>
+                                    <select id="scheduler" name="scheduler">
+                                        {% for id, name in scheduler_options.items() %}
+                                        <option value="{{ id }}" {% if scheduler == id %}selected{% endif %}>{{ name }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <small>Sampling algorithm used for image generation. Different samplers produce different results and have different speed/quality tradeoffs.</small>
+                                </div>
+                                
+                                <div class="settings-footer">
+                                    <div>
+                                        <label>Batch Generation:</label>
+                                        
+                                        <div class="batch-settings">
+                                            <div class="batch-column">
+                                                <label for="batch_size">Images per batch:</label>
+                                                <input type="number" id="batch_size" name="batch_size" value="{{ batch_size }}" min="1" max="4" step="1">
+                                                <small>Number of images to generate in parallel (1-4)</small>
+                                            </div>
+                                            <div class="batch-column">
+                                                <label for="batch_count">Number of batches:</label>
+                                                <input type="number" id="batch_count" name="batch_count" value="{{ batch_count }}" min="1" max="4" step="1">
+                                                <small>Total batches to run (1-4). Total images = batch size × batches</small>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Dynamic total images counter -->
+                                        <p id="total-images-info" style="margin-top: 8px; font-weight: bold; color: #4CAF50;"></p>
+                                    </div>
+                                    
+                                    <div>
+                                        <button type="submit" id="generate-btn" class="generate-btn">Generate Image</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+                
+                <!-- Right column - Model selection and LoRA -->
+                <div class="secondary-column">
+                    <div class="panel">
+                        <div class="model-sources">
+                            <label>Select model source:</label>
+                            
+                            <div class="model-option">
+                                <input type="radio" id="source-hf" name="model_source" value="huggingface" {% if not is_civitai and not force_civitai %}checked{% endif %} onclick="toggleModelSource('huggingface')">
+                                <label for="source-hf" style="display: inline;">Hugging Face SDXL Models</label>
+                            </div>
+                            
+                            <div class="model-option">
+                                <input type="radio" id="source-civitai" name="model_source" value="civitai" {% if is_civitai or force_civitai %}checked{% endif %} onclick="toggleModelSource('civitai')">
+                                <label for="source-civitai" style="display: inline;">CivitAI SDXL Models</label>
+                            </div>
+                        </div>
+                        
+                        <!-- Hugging Face model options -->
+                        <div id="huggingface-options" class="model-panel" {% if not is_civitai and not force_civitai %}style="display: block"{% else %}style="display: none"{% endif %}>
+                            <div class="info-box hf-info">
+                                <p>You can use any Hugging Face SDXL model. If not specified, the default model ({{ default_model }}) will be used.</p>
+                            </div>
+                            
+                            <div>
+                                <label for="model_id">SDXL Model ID:</label>
+                                <input type="text" id="model_id" name="model_id" value="{% if not is_civitai %}{{ model_id }}{% endif %}" placeholder="e.g., stabilityai/stable-diffusion-xl-base-1.0">
+                            </div>
+                        </div>
+                        
+                        <!-- CivitAI model options -->
+                        <div id="civitai-options" class="model-panel" {% if is_civitai or force_civitai %}style="display: block"{% else %}style="display: none"{% endif %}>
+                            <div class="info-box civitai-info">
+                                <p>Enter the CivitAI model ID from the URL. Make sure to select an SDXL model version. For example, if the model URL is 'https://civitai.com/models/135867', the ID is '135867'.</p>
+                            </div>
+                            
+                            <div>
+                                <label for="civitai_id">CivitAI SDXL Model ID:</label>
+                                <input type="text" id="civitai_id" name="civitai_id" value="{{ civitai_id|default('1637364') }}" placeholder="e.g., 135867" {% if is_civitai or force_civitai %}required{% endif %}>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="panel">
+                        <!-- Always expanded LoRA Settings (no details/summary) -->
+                        <h3 style="margin-top: 0; padding: 10px 15px; background-color: #2c3651; color: #ffffff; border-radius: 6px;">LoRA Settings</h3>
+                        <div>
+                            <div class="info-box" style="background-color: rgba(76, 175, 80, 0.1); border-left: 5px solid #4CAF50;">
+                                <p>Add up to 5 LoRAs from either HuggingFace or CivitAI. For CivitAI, use the model ID from the URL. For HuggingFace, use the repository name.</p>
+                            </div>
+                            
+                            <!-- LoRA 1 - Pre-checked with preset values -->
+                            <div class="lora-container">
+                                <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                                    <input type="checkbox" id="lora1_enabled" name="lora1_enabled" {% if loras|length >= 1 and loras[0] %}checked{% else %}checked{% endif %} style="margin-right: 10px;">
+                                    <label for="lora1_enabled" style="display: inline; margin-bottom: 0;">Enable LoRA 1</label>
+                                </div>
+                                
+                                <div style="margin-left: 25px;">
+                                    <div style="margin-bottom: 10px;">
+                                        <label>LoRA Source:</label>
+                                        <div style="display: flex; align-items: center; margin-bottom: 5px;">
+                                            <input type="radio" id="lora1_civitai" name="lora1_source" value="civitai" checked>
+                                            <label for="lora1_civitai" style="display: inline; font-weight: normal; margin: 0 15px 0 5px;">CivitAI</label>
+                                            
+                                            <input type="radio" id="lora1_hf" name="lora1_source" value="huggingface">
+                                            <label for="lora1_hf" style="display: inline; font-weight: normal; margin: 0 0 0 5px;">Hugging Face</label>
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <label for="lora1_id">LoRA ID:</label>
+                                        <input type="text" id="lora1_id" name="lora1_id" value="{% if loras|length >= 1 and loras[0].model_id %}{{ loras[0].model_id|replace('civitai:', '')|replace('hf:', '') }}{% else %}1681903{% endif %}" placeholder="e.g., 123456 (CivitAI) or repo/path (HF)">
+                                    </div>
+                                    
+                                    <div>
+                                        <label for="lora1_weight">Weight:</label>
+                                        <input type="number" id="lora1_weight" name="lora1_weight" value="{% if loras|length >= 1 and loras[0].weight %}{{ loras[0].weight }}{% else %}2.0{% endif %}" min="0.1" max="2" step="0.05" placeholder="0.1-2.0">
+                                        <small>How strongly to apply this LoRA. Higher values = stronger effect. Range: 0.1-2.0</small>
+                                    </div>
+                                    
+                                    <div class="lora-preview" id="lora1_preview" aria-live="polite"></div>
+                                </div>
+                            </div>
+                            
+                            <!-- LoRA 2 - Pre-checked with preset values -->
+                            <div class="lora-container">
+                                <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                                    <input type="checkbox" id="lora2_enabled" name="lora2_enabled" {% if loras|length >= 2 and loras[1] %}checked{% else %}checked{% endif %} style="margin-right: 10px;">
+                                    <label for="lora2_enabled" style="display: inline; margin-bottom: 0;">Enable LoRA 2</label>
+                                </div>
+                                
+                                <div style="margin-left: 25px;">
+                                    <div style="margin-bottom: 10px;">
+                                        <label>LoRA Source:</label>
+                                        <div style="display: flex; align-items: center; margin-bottom: 5px;">
+                                            <input type="radio" id="lora2_civitai" name="lora2_source" value="civitai" checked>
+                                            <label for="lora2_civitai" style="display: inline; font-weight: normal; margin: 0 15px 0 5px;">CivitAI</label>
+                                            
+                                            <input type="radio" id="lora2_hf" name="lora2_source" value="huggingface">
+                                            <label for="lora2_hf" style="display: inline; font-weight: normal; margin: 0 0 0 5px;">Hugging Face</label>
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <label for="lora2_id">LoRA ID:</label>
+                                        <input type="text" id="lora2_id" name="lora2_id" value="{% if loras|length >= 2 and loras[1].model_id %}{{ loras[1].model_id|replace('civitai:', '')|replace('hf:', '') }}{% else %}1764869{% endif %}" placeholder="e.g., 123456 (CivitAI) or repo/path (HF)">
+                                    </div>
+                                    
+                                    <div>
+                                        <label for="lora2_weight">Weight:</label>
+                                        <input type="number" id="lora2_weight" name="lora2_weight" value="{% if loras|length >= 2 and loras[1].weight %}{{ loras[1].weight }}{% else %}0.75{% endif %}" min="0.1" max="2" step="0.05" placeholder="0.1-2.0">
+                                        <small>How strongly to apply this LoRA. Higher values = stronger effect. Range: 0.1-2.0</small>
+                                    </div>
+                                    
+                                    <div class="lora-preview" id="lora2_preview" aria-live="polite"></div>
+                                </div>
+                            </div>
+                            
+                            {% for i in range(3, 6) %}
+                            <div class="lora-container">
+                                <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                                    <input type="checkbox" id="lora{{ i }}_enabled" name="lora{{ i }}_enabled" {% if loras|length >= i and loras[i-1] %}checked{% endif %} style="margin-right: 10px;">
+                                    <label for="lora{{ i }}_enabled" style="display: inline; margin-bottom: 0;">Enable LoRA {{ i }}</label>
+                                </div>
+                                
+                                <div style="margin-left: 25px;">
+                                    <div style="margin-bottom: 10px;">
+                                        <label>LoRA Source:</label>
+                                        <div style="display: flex; align-items: center; margin-bottom: 5px;">
+                                            <input type="radio" id="lora{{ i }}_civitai" name="lora{{ i }}_source" value="civitai" {% if loras|length >= i and loras[i-1].model_id and 'civitai:' in loras[i-1].model_id %}checked{% else %}checked{% endif %}>
+                                            <label for="lora{{ i }}_civitai" style="display: inline; font-weight: normal; margin: 0 15px 0 5px;">CivitAI</label>
+                                            
+                                            <input type="radio" id="lora{{ i }}_hf" name="lora{{ i }}_source" value="huggingface" {% if loras|length >= i and loras[i-1].model_id and 'hf:' in loras[i-1].model_id %}checked{% endif %}>
+                                            <label for="lora{{ i }}_hf" style="display: inline; font-weight: normal; margin: 0 0 0 5px;">Hugging Face</label>
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <label for="lora{{ i }}_id">LoRA ID:</label>
+                                        <input type="text" id="lora{{ i }}_id" name="lora{{ i }}_id" value="{% if loras|length >= i and loras[i-1].model_id %}{{ loras[i-1].model_id|replace('civitai:', '')|replace('hf:', '') }}{% endif %}" placeholder="e.g., 123456 (CivitAI) or repo/path (HF)">
+                                    </div>
+                                    
+                                    <div>
+                                        <label for="lora{{ i }}_weight">Weight:</label>
+                                        <input type="number" id="lora{{ i }}_weight" name="lora{{ i }}_weight" value="{% if loras|length >= i and loras[i-1].weight %}{{ loras[i-1].weight }}{% else %}0.75{% endif %}" min="0.1" max="2" step="0.05" placeholder="0.1-2.0">
+                                        <small>How strongly to apply this LoRA. Higher values = stronger effect. Range: 0.1-2.0</small>
+                                    </div>
+                                    
+                                    <div class="lora-preview" id="lora{{ i }}_preview" aria-live="polite"></div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </form>
+        
+        <!-- Add a Clear Form button for localStorage -->
+        <div style="text-align: center; margin-top: 20px; margin-bottom: 30px;">
+            <button id="clear-form-btn" style="background-color: #f44336;">Clear Saved Form Data</button>
+        </div>
+    </div>
+
+    <!-- Include JavaScript file -->
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html> 
