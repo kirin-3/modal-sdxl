@@ -494,39 +494,7 @@ small {
     to {bottom: 0; opacity: 0;}
 }
 
-/* LoRA Preview */
-.lora-preview {
-    margin-top: 10px;
-    min-height: 50px;
-}
-
-.preview-loading {
-    text-align: center;
-    color: var(--color-text-muted);
-    font-style: italic;
-    padding: 10px;
-}
-
-.preview-content {
-    background-color: rgba(0,0,0,0.2);
-    border-radius: var(--border-radius-sm);
-    padding: 8px;
-}
-
-.preview-info {
-    margin-bottom: 5px;
-    font-size: 14px;
-}
-
-.preview-placeholder {
-    background-color: var(--color-border);
-    height: 80px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    border-radius: var(--border-radius-sm);
-    color: var(--color-text-secondary);
-}
+/* LoRA Preview section removed */
 
 /* Prompt History */
 #history-panel {
@@ -952,4 +920,42 @@ small {
 .gallery-img:hover {
     transform: scale(1.05);
     box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* Flash messages */
+.flash-message {
+    padding: 10px 15px;
+    margin-bottom: 15px;
+    border-radius: var(--border-radius-md);
+    position: relative;
+    animation: fadeIn 0.5s;
+}
+
+.flash-message.success {
+    background-color: rgba(76, 175, 80, 0.1);
+    border-left: 5px solid var(--color-accent-primary);
+    color: var(--color-accent-primary);
+}
+
+.flash-message.error {
+    background-color: rgba(255, 85, 85, 0.1);
+    border-left: 5px solid var(--color-accent-danger);
+    color: var(--color-accent-danger);
+}
+
+.flash-message.info {
+    background-color: rgba(33, 150, 243, 0.1);
+    border-left: 5px solid var(--color-accent-secondary);
+    color: var(--color-accent-secondary);
+}
+
+.flash-message.warning {
+    background-color: rgba(255, 160, 0, 0.1);
+    border-left: 5px solid var(--color-accent-warning);
+    color: var(--color-accent-warning);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
 } 

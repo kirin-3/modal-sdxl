@@ -176,56 +176,7 @@ const UIComponents = {
         }
     },
     
-    loraPreview: {
-        init() {
-            this.setupLoraIDListeners();
-        },
-        
-        setupLoraIDListeners() {
-            // Add event listeners to LoRA ID inputs
-            for (let i = 1; i <= 5; i++) {
-                const loraInput = document.getElementById(`lora${i}_id`);
-                const sourceRadios = document.querySelectorAll(`input[name="lora${i}_source"]`);
-                
-                if (loraInput && sourceRadios) {
-                    loraInput.addEventListener('input', () => this.updateLoraPreview(i));
-                    sourceRadios.forEach(radio => {
-                        radio.addEventListener('change', () => this.updateLoraPreview(i));
-                    });
-                }
-            }
-        },
-        
-        updateLoraPreview(index) {
-            const loraId = document.getElementById(`lora${index}_id`).value;
-            const source = document.querySelector(`input[name="lora${index}_source"]:checked`).value;
-            const previewContainer = document.getElementById(`lora${index}_preview`);
-            
-            if (!previewContainer || !loraId) return;
-            
-            previewContainer.innerHTML = '<div class="preview-loading">Loading preview...</div>';
-            
-            // In a real implementation, you would fetch the preview from CivitAI or HuggingFace
-            // Here we're just showing a placeholder with the ID
-            if (source === 'civitai') {
-                // Simplified example - in reality you'd fetch from the CivitAI API
-                // and handle errors appropriately
-                previewContainer.innerHTML = `
-                    <div class="preview-content">
-                        <div class="preview-info">CivitAI LoRA Preview #${loraId}</div>
-                        <div class="preview-placeholder">Preview image would load here</div>
-                    </div>
-                `;
-            } else {
-                previewContainer.innerHTML = `
-                    <div class="preview-content">
-                        <div class="preview-info">HuggingFace LoRA Preview</div>
-                        <div class="preview-placeholder">HF preview for ${loraId}</div>
-                    </div>
-                `;
-            }
-        }
-    }
+    // LoRA preview has been removed
 };
 
 // Function to open the image modal
@@ -486,7 +437,6 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Initialize UI components
     UIComponents.promptHistory.init();
-    UIComponents.loraPreview.init();
     
     // Initialize new components
     ConnectionStatus.init();
@@ -569,13 +519,9 @@ batchSizeInput.addEventListener('input', updateTotalImages);
 batchCountInput.addEventListener('input', updateTotalImages);
 
 // Form submission handling
-document.getElementById('generate-form').addEventListener('submit', function(e) {
-    // Prevent default form submission
-    e.preventDefault();
-    
-    // Show loading indicator
+document.getElementById('generate-form').addEventListener('submit', function() {
+    // Show loading indicator before traditional form submit
     document.getElementById('loading').style.display = 'block';
-    document.getElementById('generate-form').style.display = 'none';
     
     // Change button text to "Generating..."
     const generateBtns = document.querySelectorAll('.generate-btn');
@@ -584,92 +530,25 @@ document.getElementById('generate-form').addEventListener('submit', function(e) 
         btn.disabled = true;
     });
     
-    // Set up form data
-    const formData = new FormData(this);
+    // Save form data to localStorage before submission
+    saveFormData();
     
-    // Function to handle submission with retry logic
-    function submitWithRetry(retryCount = 0, maxRetries = 2) {
-        // Get batch parameters to determine appropriate timeout
-        const batchSize = parseInt(document.getElementById('batch_size').value) || 1;
-        const batchCount = parseInt(document.getElementById('batch_count').value) || 1;
-        
-        // Set timeout based on batch parameters
-        // Non-batch: 10 minutes (600,000ms)
-        // Batch: 20 minutes (1,200,000ms)
-        const isBatch = batchSize > 1 || batchCount > 1;
-        const timeoutMs = isBatch ? 1200000 : 600000;
-        
-        // Show timeout information
-        const timeoutMinutes = timeoutMs / 60000;
-        ConnectionStatus.show(`Connecting to server (${timeoutMinutes} minute timeout)...`, 'connecting');
-        
-        fetch('/', {
-            method: 'POST',
-            body: formData,
-            // Use dynamic timeout based on batch settings
-            timeout: timeoutMs
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error ${response.status}`);
-            }
-            // Show success indicator
-            ConnectionStatus.show('Success! Loading results...', 'success');
-            // Redirect to display results
-            window.location.href = window.location.pathname + window.location.search;
-        })
-        .catch(error => {
-            console.error('Error during form submission:', error);
-            
-            // Hide the connecting status
-            ConnectionStatus.hide();
-            
-            // Retry logic for connection errors
-            if (retryCount < maxRetries && 
-                (error.message.includes('network') || 
-                error.message.includes('connection') || 
-                error.message.includes('reset'))) {
-                
-                // Use toast for retry notification
-                showToast(`Connection issue detected. Retrying... (${retryCount + 1}/${maxRetries})`);
-                
-                // Show better error info using our new handler
-                if (retryCount === 0) {
-                    ErrorHandler.handleNetworkError(error);
-                }
-                
-                // Exponential backoff: wait longer between each retry
-                setTimeout(() => {
-                    submitWithRetry(retryCount + 1, maxRetries);
-                }, 2000 * Math.pow(2, retryCount)); // 2s, 4s, 8s, etc.
-            } else {
-                // Reset UI on final error
-                generateBtns.forEach(btn => {
-                    btn.textContent = "Generate Image";
-                    btn.disabled = false;
-                });
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('generate-form').style.display = 'block';
-                
-                // Show comprehensive error message with our enhanced error handler
-                ErrorHandler.showError(
-                    'The server connection was interrupted. This often happens with large batch sizes or complex prompts.',
-                    'Connection Reset Error',
-                    'Try reducing your batch size to 1, using fewer steps, or simplifying your prompt.'
-                );
-            }
-        });
-    }
+    // Get batch parameters to show appropriate message
+    const batchSize = parseInt(document.getElementById('batch_size').value) || 1;
+    const batchCount = parseInt(document.getElementById('batch_count').value) || 1;
+    const isBatch = batchSize > 1 || batchCount > 1;
+    const timeoutMinutes = isBatch ? 20 : 10;
     
-    // Start the submission process with retry logic
-    submitWithRetry();
+    // Show timeout information
+    // Do not edit wording here
+    ConnectionStatus.show(`Processing request... (up to ${timeoutMinutes} minutes for large batches)`, 'connecting');
+    
+    // Allow form to submit naturally - no preventDefault()
+    // Browser will handle the redirect to the results page
+    return true;
 });
 
-// Ensure both Generate buttons submit the form
-document.getElementById('top-generate-btn').addEventListener('click', function(e) {
-    e.preventDefault();
-    document.getElementById('generate-form').submit();
-});
+
 
 // Toggle model source display
 function toggleModelSource(source) {
@@ -691,10 +570,33 @@ function setDimensions(width, height) {
     saveFormData(); // Save form data after setting dimensions
 }
 
-// Scroll to result on page load
+// Scroll to result on page load and reset UI elements
 window.onload = function() {
+    // Always hide loading indicator
+    const loadingDiv = document.getElementById('loading');
+    if (loadingDiv) {
+        loadingDiv.style.display = 'none';
+    }
+
+    // Always reset generate buttons
+    const generateBtns = document.querySelectorAll('.generate-btn');
+    generateBtns.forEach(btn => {
+        if (btn) { // Check if button exists
+            btn.textContent = "Generate Image";
+            btn.disabled = false;
+        }
+    });
+
+    // Always clear any progress timer
+    if (window.progressTimer) {
+        clearInterval(window.progressTimer);
+        window.progressTimer = null; // Clear the variable itself
+    }
+
     // If there's a result image, scroll to it
-    if (document.getElementById('result')) {
-        document.getElementById('result').scrollIntoView({behavior: 'smooth'});
+    const resultDiv = document.getElementById('result');
+    if (resultDiv) {
+        resultDiv.scrollIntoView({behavior: 'smooth'});
+        // Success notification is handled by Flask flash messages
     }
 } 

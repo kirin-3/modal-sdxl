@@ -27,26 +27,37 @@
         </div>
         {% endif %}
         
+        <!-- Display flash messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                <div class="flash-message {{ category }}" role="alert" aria-live="polite">
+                    {{ message }}
+                </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
         <!-- Display generated images first (at the top) -->
-        {% if image %}
+        {% if saved_paths and saved_paths|length > 0 %}
         <div class="image-container" id="result">
             <h2>Generated Images</h2>
             
             <!-- Multiple image case - only show gallery -->
-            {% if images and images|length > 1 %}
+            {% if saved_paths|length > 1 %}
             <div>
-                <h3>Generated Images ({{ images|length }} total)</h3>
+                <h3>Generated Images ({{ saved_paths|length }} total)</h3>
                 <div class="gallery">
-                    {% for img in images %}
+                    {% for filename in image_filenames %}
                     <div class="gallery-item" data-index="{{ loop.index }}">
-                        <img src="data:image/png;base64,{{ img|b64encode }}" alt="Generated image {{ loop.index }}" class="gallery-img" onclick="enlargeImage(this)">
+                        <img src="{{ url_for('get_image', filename=filename) }}" alt="Generated image {{ loop.index }}" class="gallery-img" onclick="enlargeImage(this)">
                     </div>
                     {% endfor %}
                 </div>
             </div>
             <!-- Single image case - show main image -->
             {% else %}
-            <img src="data:image/png;base64,{{ image|b64encode }}" alt="Generated image">
+            <img src="{{ url_for('get_image', filename=image_filenames[0]) }}" alt="Generated image">
             {% endif %}
             
             <div class="generation-info">
@@ -125,6 +136,33 @@
         
         <div class="loading" id="loading">
             <p>Generating SDXL image... This may take a minute or longer for first-time model downloads.</p>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <div id="time-estimate">Please wait... Connection active</div>
+            <script>
+                // Add simple loading animation
+                const progressFill = document.getElementById('progress-fill');
+                const timeEstimate = document.getElementById('time-estimate');
+                let progress = 0;
+                const totalTime = 150; // 2.5 minutes estimate
+                
+                // Start indeterminate animation
+                progressFill.style.width = '100%';
+                progressFill.style.animationName = 'move-stripes';
+                
+                // Simple timer during the wait
+                let seconds = 0;
+                // Store timer reference globally so it can be cleared later
+                window.progressTimer = setInterval(() => {
+                    seconds++;
+                    timeEstimate.textContent = `Processing for ${seconds} seconds... Please wait`;
+                    
+                    if (seconds >= 300) { // 5 minutes
+                        timeEstimate.innerHTML = "Still processing... This might take a few more minutes.<br>Large batches and complex prompts take longer.";
+                    }
+                }, 1000);
+            </script>
         </div>
         
         <form method="POST" action="/" id="generate-form">
@@ -142,9 +180,9 @@
                             <textarea id="negative_prompt" name="negative_prompt" placeholder="cartoon, animation, drawing, low quality, blurry, nsfw">{{ negative_prompt }}</textarea>
                         </div>
                         
-                        <!-- Add duplicate Generate button at the top -->
+                        <!-- Generate button -->
                         <div style="text-align: center; margin-top: 15px;">
-                            <button type="submit" id="top-generate-btn" class="generate-btn">Generate Image</button>
+                            <button type="submit" id="generate-btn" class="generate-btn">Generate Image</button>
                         </div>
                     </div>
                     
@@ -226,10 +264,6 @@
                                         <!-- Dynamic total images counter -->
                                         <p id="total-images-info" style="margin-top: 8px; font-weight: bold; color: #4CAF50;"></p>
                                     </div>
-                                    
-                                    <div>
-                                        <button type="submit" id="generate-btn" class="generate-btn">Generate Image</button>
-                                    </div>
                                 </div>
                             </div>
                         </details>
@@ -268,7 +302,7 @@
                         <!-- CivitAI model options -->
                         <div id="civitai-options" class="model-panel" {% if is_civitai or force_civitai %}style="display: block"{% else %}style="display: none"{% endif %}>
                             <div class="info-box civitai-info">
-                                <p>Enter the CivitAI model ID from the URL. Make sure to select an SDXL model version. For example, if the model URL is 'https://civitai.com/models/135867', the ID is '135867'.</p>
+                                <p>Enter the CivitAI model ID from the URL. Make sure to select an SDXL model version. For example, if the model URL is 'https://civitai.com/api/download/models/997426?type=Model&format=SafeTensor', the ID is '997426'.</p>
                             </div>
                             
                             <div>
@@ -316,7 +350,7 @@
                                         <small>How strongly to apply this LoRA. Higher values = stronger effect. Range: 0.1-2.0</small>
                                     </div>
                                     
-                                    <div class="lora-preview" id="lora1_preview" aria-live="polite"></div>
+
                                 </div>
                             </div>
                             
@@ -350,7 +384,7 @@
                                         <small>How strongly to apply this LoRA. Higher values = stronger effect. Range: 0.1-2.0</small>
                                     </div>
                                     
-                                    <div class="lora-preview" id="lora2_preview" aria-live="polite"></div>
+
                                 </div>
                             </div>
                             
@@ -384,7 +418,7 @@
                                         <small>How strongly to apply this LoRA. Higher values = stronger effect. Range: 0.1-2.0</small>
                                     </div>
                                     
-                                    <div class="lora-preview" id="lora{{ i }}_preview" aria-live="polite"></div>
+
                                 </div>
                             </div>
                             {% endfor %}
