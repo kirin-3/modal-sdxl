@@ -29,7 +29,7 @@ A powerful and flexible text-to-image generation system built with [Modal](https
 1. Clone this repository:
    ```
    git clone https://github.com/kirin-3/modal-sdxl
-   cd sdxl-generator
+   cd modal-sdxl
    ```
 
 2. Install the required packages:
