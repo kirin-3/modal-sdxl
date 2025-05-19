@@ -442,6 +442,18 @@ document.addEventListener('DOMContentLoaded', function() {
     ConnectionStatus.init();
     ErrorHandler.init();
     NetworkMonitor.init();
+    
+    // Ensure loading div is hidden on initial page load
+    const loadingDiv = document.getElementById('loading');
+    if (loadingDiv) {
+        loadingDiv.style.display = 'none';
+    }
+    
+    // If there's a result image, scroll to it
+    const resultDiv = document.getElementById('result');
+    if (resultDiv) {
+        resultDiv.scrollIntoView({behavior: 'smooth'});
+    }
 });
 
 // Save form data as user types/changes values
@@ -518,10 +530,24 @@ function updateTotalImages() {
 batchSizeInput.addEventListener('input', updateTotalImages);
 batchCountInput.addEventListener('input', updateTotalImages);
 
+// Global variable to track if a form is currently being submitted
+let isFormSubmitting = false;
+
 // Form submission handling
-document.getElementById('generate-form').addEventListener('submit', function() {
+document.getElementById('generate-form').addEventListener('submit', function(event) {
+    // Prevent double submission
+    if (isFormSubmitting) {
+        event.preventDefault();
+        return false;
+    }
+    
+    isFormSubmitting = true;
+    
     // Show loading indicator before traditional form submit
-    document.getElementById('loading').style.display = 'block';
+    const loadingDiv = document.getElementById('loading');
+    if (loadingDiv) {
+        loadingDiv.style.display = 'block';
+    }
     
     // Change button text to "Generating..."
     const generateBtns = document.querySelectorAll('.generate-btn');
@@ -543,40 +569,50 @@ document.getElementById('generate-form').addEventListener('submit', function() {
     // Do not edit wording here
     ConnectionStatus.show(`Processing request... (up to ${timeoutMinutes} minutes for large batches)`, 'connecting');
     
+    // Make sure to clean up any existing progress timer
+    if (window.progressTimer) {
+        clearInterval(window.progressTimer);
+        window.progressTimer = null;
+    }
+    
+    // Initialize timer for UI feedback
+    let seconds = 0;
+    window.progressTimer = setInterval(() => {
+        seconds++;
+        const timeEstimateEl = document.getElementById('time-estimate');
+        if (timeEstimateEl) {
+            timeEstimateEl.textContent = `Processing for ${seconds} seconds... Please wait`;
+            
+            if (seconds >= 300) { // 5 minutes
+                timeEstimateEl.innerHTML = "Still processing... This might take a few more minutes.<br>Large batches and complex prompts take longer.";
+            }
+        }
+    }, 1000);
+    
     // Allow form to submit naturally - no preventDefault()
-    // Browser will handle the redirect to the results page
     return true;
 });
 
-
-
-// Toggle model source display
-function toggleModelSource(source) {
-    if (source === 'huggingface') {
-        document.getElementById('huggingface-options').style.display = 'block';
-        document.getElementById('civitai-options').style.display = 'none';
-        document.getElementById('civitai_id').removeAttribute('required');
-    } else {
-        document.getElementById('huggingface-options').style.display = 'none';
-        document.getElementById('civitai-options').style.display = 'block';
-        document.getElementById('civitai_id').setAttribute('required', 'required');
+// Always need to clean up timers when page loads/unloads
+window.addEventListener('beforeunload', function() {
+    if (window.progressTimer) {
+        clearInterval(window.progressTimer);
+        window.progressTimer = null;
     }
-}
+});
 
-// Set dimensions from presets
-function setDimensions(width, height) {
-    document.getElementById('width').value = width;
-    document.getElementById('height').value = height;
-    saveFormData(); // Save form data after setting dimensions
-}
-
-// Scroll to result on page load and reset UI elements
+// Improved window.onload handling
 window.onload = function() {
+    console.log("Page loaded - cleaning up UI state");
+    
     // Always hide loading indicator
     const loadingDiv = document.getElementById('loading');
     if (loadingDiv) {
         loadingDiv.style.display = 'none';
     }
+
+    // Reset submit state
+    isFormSubmitting = false;
 
     // Always reset generate buttons
     const generateBtns = document.querySelectorAll('.generate-btn');
@@ -599,4 +635,24 @@ window.onload = function() {
         resultDiv.scrollIntoView({behavior: 'smooth'});
         // Success notification is handled by Flask flash messages
     }
+}
+
+// Toggle model source display
+function toggleModelSource(source) {
+    if (source === 'huggingface') {
+        document.getElementById('huggingface-options').style.display = 'block';
+        document.getElementById('civitai-options').style.display = 'none';
+        document.getElementById('civitai_id').removeAttribute('required');
+    } else {
+        document.getElementById('huggingface-options').style.display = 'none';
+        document.getElementById('civitai-options').style.display = 'block';
+        document.getElementById('civitai_id').setAttribute('required', 'required');
+    }
+}
+
+// Set dimensions from presets
+function setDimensions(width, height) {
+    document.getElementById('width').value = width;
+    document.getElementById('height').value = height;
+    saveFormData(); // Save form data after setting dimensions
 } 

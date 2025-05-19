@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 from werkzeug.serving import WSGIRequestHandler
+from werkzeug.exceptions import HTTPException
 
 # Set longer timeouts for the Werkzeug server
 # This helps prevent connection resets during long-running image generation
@@ -117,11 +118,9 @@ def index():
     batch_count = 1
     images = []  # For storing multiple images (this is the one we need to populate correctly)
     saved_paths = []  # Initialize empty list for saved paths
+    image_filenames = []  # Initialize empty list for image filenames
     force_civitai = True  # Force CivitAI by default
     loras = []
-    
-    # We previously had session restoration code here
-    # Now we're using direct rendering instead of redirect + session
     
     # Pre-filled LoRA values (moved this down slightly for clarity, no functional change)
     loras_from_form = request.form.getlist('loras') # If loras are passed differently
@@ -236,9 +235,7 @@ def index():
                     is_civitai = True
                 else:
                     error = "Please enter a CivitAI model ID"
-                    # ... (render_template with error)
                     return render_template('index.html', error=error, prompt=prompt, negative_prompt=negative_prompt, seed=seed_input, model_id=model_id, default_model=DEFAULT_MODEL_ID, is_civitai=is_civitai, civitai_id=civitai_id, width=width, height=height, steps=steps, guidance_scale=guidance_scale, clip_skip=clip_skip, scheduler=scheduler, loras=loras, force_civitai=force_civitai, scheduler_options=AVAILABLE_SCHEDULERS, batch_size=batch_size, batch_count=batch_count)
-
 
             # Check seed (assign to outer scope `seed` if valid)
             seed_val = None
@@ -247,7 +244,6 @@ def index():
                     seed_val = int(seed_input)
                 except ValueError:
                     error = "Seed must be an integer"
-                    # ... (render_template with error)
                     return render_template('index.html', error=error, prompt=prompt, negative_prompt=negative_prompt, seed=seed_input, model_id=model_id, default_model=DEFAULT_MODEL_ID, is_civitai=is_civitai, civitai_id=civitai_id, width=width, height=height, steps=steps, guidance_scale=guidance_scale, clip_skip=clip_skip, scheduler=scheduler, loras=loras, force_civitai=force_civitai, scheduler_options=AVAILABLE_SCHEDULERS, batch_size=batch_size, batch_count=batch_count)
             seed = seed_val # Assign to outer scope `seed`
 
@@ -256,18 +252,25 @@ def index():
                 error = "Modal endpoint URL not configured."
             else:
                 try:
+                    # Create a shorter-lived session for the API request to avoid server timeouts
+                    request_session = requests.Session()
+                    
+                    # Set up the parameters for the request
                     params = {
                         'prompt': prompt, 'negative_prompt': negative_prompt,
                         'width': width, 'height': height, 'steps': steps,
                         'guidance_scale': guidance_scale, 'batch_size': batch_size,
                         'batch_count': batch_count, 'scheduler': scheduler
                     }
+                    
+                    # Add optional parameters
                     if seed is not None: params['seed'] = seed
                     if clip_skip is not None: params['clip_skip'] = clip_skip
                     if model_id and (is_civitai or model_id != DEFAULT_MODEL_ID):
                         params['model_id'] = model_id
                     if loras: params['loras'] = json.dumps(loras)
                     
+                    # Log what we're doing
                     model_display = civitai_id if is_civitai else (model_id or DEFAULT_MODEL_ID)
                     print(f"Generating SDXL image with model: {model_display}, dimensions: {width}x{height}, steps: {steps}, guidance: {guidance_scale}")
                     print(f"Batch settings: {batch_size} images per batch, {batch_count} batches")
@@ -279,106 +282,122 @@ def index():
                             lora_info.append(f"{model_id}:{weight}")
                         print(f"Using LoRAs: {', '.join(lora_info)}")
                     
+                    # Calculate an appropriate timeout based on the complexity of the request
                     timeout_seconds = 300 + (batch_count - 1) * 120 + (batch_size - 1) * 60
                     if model_id != DEFAULT_MODEL_ID or is_civitai or loras:
                         timeout_seconds += 180
                     print(f"Using request timeout of {timeout_seconds} seconds")
                     
-                    session_req = requests.Session()
+                    # Set up request headers and session
+                    request_session = requests.Session()
                     adapter = requests.adapters.HTTPAdapter(max_retries=3, pool_connections=5, pool_maxsize=10)
-                    session_req.mount('http://', adapter)
-                    session_req.mount('https://', adapter)
+                    request_session.mount('http://', adapter)
+                    request_session.mount('https://', adapter)
                     headers = {'Connection': 'keep-alive', 'Keep-Alive': 'timeout=600, max=1000', 'User-Agent': 'SDXL-Generator/1.0'}
                     
+                    # Make the API request with proper error handling
                     try:
                         print(f"Starting request to Modal endpoint with {timeout_seconds}s timeout")
-                        response = session_req.get(modal_endpoint, params=params, timeout=timeout_seconds, stream=True, headers=headers)
+                        response = request_session.get(modal_endpoint, params=params, timeout=timeout_seconds, headers=headers)
                         response.raise_for_status()
                         print(f"Modal API responded with status code: {response.status_code}")
                     except requests.exceptions.RequestException as req_err:
-                        # ... (error handling and render_template)
                         error_message = f"Error from Modal API: {str(req_err)}"
-                        if isinstance(req_err, requests.exceptions.Timeout): error_message = "The request timed out. Try with a smaller batch size or fewer steps."
-                        elif isinstance(req_err, requests.exceptions.ConnectionError): error_message = "Connection error. The server may be temporarily unavailable."
+                        if isinstance(req_err, requests.exceptions.Timeout): 
+                            error_message = "The request timed out. Try with a smaller batch size or fewer steps."
+                        elif isinstance(req_err, requests.exceptions.ConnectionError): 
+                            error_message = "Connection error. The server may be temporarily unavailable."
                         error = error_message
                         return render_template('index.html', error=error, prompt=prompt, negative_prompt=negative_prompt, seed=seed, model_id=model_id, default_model=DEFAULT_MODEL_ID, is_civitai=is_civitai, civitai_id=civitai_id, width=width, height=height, steps=steps, guidance_scale=guidance_scale, clip_skip=clip_skip, scheduler=scheduler, batch_size=batch_size, batch_count=batch_count, loras=loras, force_civitai=force_civitai, scheduler_options=AVAILABLE_SCHEDULERS)
 
                     if response.status_code == 200:
                         print("Received successful 200 response, processing content...")
                         
-                        # Check if we got a JSON response with multiple images
+                        # Check content type
                         content_type = response.headers.get('content-type', '')
                         print(f"Response content type: {content_type}")
                         
-                        # These will be populated and then put into session
-                        processed_images_data = []
+                        # Lists to store processed image data
                         processed_saved_paths = []
+                        processed_image_filenames = []
 
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        prompt_slug = slugify(prompt[:50])
+                        
+                        # Process response based on content type
                         if 'application/json' in content_type:
                             try:
+                                # For JSON responses (multiple images)
                                 resp_data = response.json()
                                 if 'images' in resp_data:
                                     num_images_resp = len(resp_data['images'])
                                     print(f"Received {num_images_resp} images in JSON response")
-                                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                    prompt_slug = slugify(prompt[:50])
+                                    
                                     for i, b64_img in enumerate(resp_data['images']):
                                         try:
                                             img_bytes = base64.b64decode(b64_img)
-                                            processed_images_data.append(img_bytes)
+                                            # Create unique filename for each image
                                             filename = f"{timestamp}_{prompt_slug}_{i+1}.png"
                                             save_path = output_dir / filename
-                                            with open(save_path, 'wb') as f: f.write(img_bytes)
+                                            
+                                            # Save the image to disk
+                                            with open(save_path, 'wb') as f:
+                                                f.write(img_bytes)
+                                            
+                                            # Add path and filename to lists
                                             processed_saved_paths.append(str(save_path))
+                                            processed_image_filenames.append(filename)
                                             print(f"Saved image to {save_path}")
-                                        except Exception as img_err: print(f"Error processing image {i+1}: {str(img_err)}")
-                                    if not processed_images_data: error = "No images were returned or processed correctly from JSON"
-                            except Exception as e: error = f"Error processing batch images: {str(e)}"
-                        else: # Single image response
-                            single_image_data_bytes = b''
-                            for chunk in response.iter_content(chunk_size=8192):
-                                single_image_data_bytes += chunk
-                            
-                            processed_images_data.append(single_image_data_bytes) # Add to list
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            prompt_slug = slugify(prompt[:50])
-                            filename = f"{timestamp}_{prompt_slug}.png"
-                            save_path = output_dir / filename
-                            with open(save_path, 'wb') as f: f.write(single_image_data_bytes)
-                            processed_saved_paths.append(str(save_path))
-                            print(f"Saved image to {save_path}")
+                                        except Exception as img_err:
+                                            print(f"Error processing image {i+1}: {str(img_err)}")
+                                    
+                                    if not processed_saved_paths:
+                                        error = "No images were returned or processed correctly from JSON"
+                            except Exception as e:
+                                error = f"Error processing batch images: {str(e)}"
+                        else:
+                            # For binary responses (single image)
+                            try:
+                                image_data = response.content
+                                
+                                # Create filename for the single image
+                                filename = f"{timestamp}_{prompt_slug}.png"
+                                save_path = output_dir / filename
+                                
+                                # Save the image to disk
+                                with open(save_path, 'wb') as f:
+                                    f.write(image_data)
+                                
+                                # Add path and filename to lists
+                                processed_saved_paths.append(str(save_path))
+                                processed_image_filenames.append(filename)
+                                print(f"Saved image to {save_path}")
+                            except Exception as e:
+                                error = f"Error saving image: {str(e)}"
 
-                        if error: # If error during processing, render now
-                             return render_template('index.html', error=error, prompt=prompt, negative_prompt=negative_prompt, seed=seed, model_id=model_id, default_model=DEFAULT_MODEL_ID, is_civitai=is_civitai, civitai_id=civitai_id, width=width, height=height, steps=steps, guidance_scale=guidance_scale, clip_skip=clip_skip, scheduler=scheduler, batch_size=batch_size, batch_count=batch_count, loras=loras, force_civitai=force_civitai, scheduler_options=AVAILABLE_SCHEDULERS)
+                        if error:
+                            # If error during processing, render error template
+                            return render_template('index.html', error=error, prompt=prompt, negative_prompt=negative_prompt, seed=seed, model_id=model_id, default_model=DEFAULT_MODEL_ID, is_civitai=is_civitai, civitai_id=civitai_id, width=width, height=height, steps=steps, guidance_scale=guidance_scale, clip_skip=clip_skip, scheduler=scheduler, batch_size=batch_size, batch_count=batch_count, loras=loras, force_civitai=force_civitai, scheduler_options=AVAILABLE_SCHEDULERS)
 
-
-                        # Process results - serve images from local files instead of memory
-                        try:
-                            # Show success message with flash
-                            flash('Images generated successfully!', 'success')
-                            
-                            # Extract just the filenames for display
-                            image_filenames = [Path(path).name for path in processed_saved_paths]
-                            
-                            # Use simple direct rendering with file paths instead of image data
-                            return render_template('index.html', 
-                                                 image=None,  # No need to include binary data
-                                                 images=None,  # No need to include binary data
-                                                 saved_paths=processed_saved_paths,
-                                                 image_filenames=image_filenames,
-                                                 output_directory_display=str(output_dir.resolve()),
-                                                 error=None,
-                                                 prompt=prompt, negative_prompt=negative_prompt,
-                                                 seed=seed, model_id=model_id, default_model=DEFAULT_MODEL_ID,
-                                                 is_civitai=is_civitai, civitai_id=civitai_id,
-                                                 width=width, height=height, steps=steps,
-                                                 guidance_scale=guidance_scale, clip_skip=clip_skip,
-                                                 scheduler=scheduler, scheduler_options=AVAILABLE_SCHEDULERS,
-                                                 batch_size=batch_size, batch_count=batch_count,
-                                                 loras=loras, force_civitai=force_civitai)
-                        except Exception as e:
-                            print(f"Error during template rendering: {str(e)}")
-                            return f"An error occurred while rendering results: {str(e)}", 500
+                        # Success - show success message
+                        flash('Images generated successfully!', 'success')
+                        
+                        # Render the template with the results
+                        return render_template('index.html', 
+                                               image=None,  # No binary data
+                                               images=None,  # No binary data
+                                               saved_paths=processed_saved_paths,
+                                               image_filenames=processed_image_filenames,
+                                               output_directory_display=str(output_dir.resolve()),
+                                               error=None,
+                                               prompt=prompt, negative_prompt=negative_prompt,
+                                               seed=seed, model_id=model_id, default_model=DEFAULT_MODEL_ID,
+                                               is_civitai=is_civitai, civitai_id=civitai_id,
+                                               width=width, height=height, steps=steps,
+                                               guidance_scale=guidance_scale, clip_skip=clip_skip,
+                                               scheduler=scheduler, scheduler_options=AVAILABLE_SCHEDULERS,
+                                               batch_size=batch_size, batch_count=batch_count,
+                                               loras=loras, force_civitai=force_civitai)
                     else:
                         error = f"Error from Modal API: {response.status_code} - {response.text}"
                 except Exception as e:
@@ -390,18 +409,32 @@ def index():
     
     # Common render path for GET or POST with errors
     return render_template('index.html', 
-                        image=image, images=images, 
-                        saved_paths=saved_paths,
-                        output_directory_display=str(output_dir.resolve()),
-                        error=error, prompt=prompt, negative_prompt=negative_prompt,
-                        seed=seed, model_id=model_id, default_model=DEFAULT_MODEL_ID,
-                        is_civitai=is_civitai, civitai_id=civitai_id,
-                        width=width, height=height, steps=steps, guidance_scale=guidance_scale,
-                        clip_skip=clip_skip, scheduler=scheduler, scheduler_options=AVAILABLE_SCHEDULERS,
-                        batch_size=batch_size, batch_count=batch_count,
-                        loras=loras, force_civitai=force_civitai)
+                          image=image, 
+                          images=images, 
+                          saved_paths=saved_paths,
+                          image_filenames=image_filenames,
+                          output_directory_display=str(output_dir.resolve()),
+                          error=error, 
+                          prompt=prompt, 
+                          negative_prompt=negative_prompt,
+                          seed=seed, 
+                          model_id=model_id, 
+                          default_model=DEFAULT_MODEL_ID,
+                          is_civitai=is_civitai, 
+                          civitai_id=civitai_id,
+                          width=width, 
+                          height=height, 
+                          steps=steps, 
+                          guidance_scale=guidance_scale,
+                          clip_skip=clip_skip, 
+                          scheduler=scheduler, 
+                          scheduler_options=AVAILABLE_SCHEDULERS,
+                          batch_size=batch_size, 
+                          batch_count=batch_count,
+                          loras=loras, 
+                          force_civitai=force_civitai)
 
-@app.route('/images/<filename>')
+@app.route('/images/<path:filename>')
 def get_image(filename):
     """Serve images from the generated_images directory"""
     try:
@@ -410,7 +443,7 @@ def get_image(filename):
         image_path = output_dir / safe_filename
         
         if image_path.exists() and image_path.is_file():
-            # Cache images for 1 hour (they don't change once generated)
+            # Set higher cache max-age for faster browsing
             response = send_file(image_path, mimetype='image/png')
             response.headers['Cache-Control'] = 'public, max-age=3600'
             return response
@@ -424,20 +457,156 @@ def get_image(filename):
 # Error handlers for common HTTP exceptions
 @app.errorhandler(404)
 def page_not_found(e):
-    return render_template('index.html', error="Page not found. Please go back to the main page."), 404
+    # Provide all necessary default values to prevent template errors
+    return render_template('index.html', 
+                          error="Page not found. Please go back to the main page.", 
+                          prompt="", 
+                          negative_prompt="", 
+                          seed=None, 
+                          model_id=DEFAULT_MODEL_ID,
+                          default_model=DEFAULT_MODEL_ID,
+                          is_civitai=False,
+                          civitai_id="1637364", 
+                          width=DEFAULT_WIDTH, 
+                          height=DEFAULT_HEIGHT, 
+                          steps=DEFAULT_STEPS, 
+                          guidance_scale=DEFAULT_GUIDANCE_SCALE,
+                          clip_skip=None, 
+                          scheduler=DEFAULT_SCHEDULER, 
+                          scheduler_options=AVAILABLE_SCHEDULERS,
+                          batch_size=1, 
+                          batch_count=1,
+                          loras=[], 
+                          force_civitai=True,
+                          saved_paths=[],
+                          image_filenames=[],
+                          image=None,
+                          images=[],
+                          output_directory_display=str(output_dir.resolve())), 404
 
 @app.errorhandler(500)
 def server_error(e):
-    return render_template('index.html', error="An internal server error occurred. Please try again later."), 500
+    # Provide all necessary default values to prevent template errors
+    return render_template('index.html', 
+                          error="An internal server error occurred. Please try again later.", 
+                          prompt="", 
+                          negative_prompt="", 
+                          seed=None, 
+                          model_id=DEFAULT_MODEL_ID,
+                          default_model=DEFAULT_MODEL_ID,
+                          is_civitai=False,
+                          civitai_id="1637364", 
+                          width=DEFAULT_WIDTH, 
+                          height=DEFAULT_HEIGHT, 
+                          steps=DEFAULT_STEPS, 
+                          guidance_scale=DEFAULT_GUIDANCE_SCALE,
+                          clip_skip=None, 
+                          scheduler=DEFAULT_SCHEDULER, 
+                          scheduler_options=AVAILABLE_SCHEDULERS,
+                          batch_size=1, 
+                          batch_count=1,
+                          loras=[], 
+                          force_civitai=True,
+                          saved_paths=[],
+                          image_filenames=[],
+                          image=None,
+                          images=[],
+                          output_directory_display=str(output_dir.resolve())), 500
 
 @app.errorhandler(400)
 def bad_request(e):
-    return render_template('index.html', error="Bad request. Please check your input."), 400
+    # Provide all necessary default values to prevent template errors
+    return render_template('index.html', 
+                          error="Bad request. Please check your input.", 
+                          prompt="", 
+                          negative_prompt="", 
+                          seed=None, 
+                          model_id=DEFAULT_MODEL_ID,
+                          default_model=DEFAULT_MODEL_ID,
+                          is_civitai=False,
+                          civitai_id="1637364", 
+                          width=DEFAULT_WIDTH, 
+                          height=DEFAULT_HEIGHT, 
+                          steps=DEFAULT_STEPS, 
+                          guidance_scale=DEFAULT_GUIDANCE_SCALE,
+                          clip_skip=None, 
+                          scheduler=DEFAULT_SCHEDULER, 
+                          scheduler_options=AVAILABLE_SCHEDULERS,
+                          batch_size=1, 
+                          batch_count=1,
+                          loras=[], 
+                          force_civitai=True,
+                          saved_paths=[],
+                          image_filenames=[],
+                          image=None,
+                          images=[],
+                          output_directory_display=str(output_dir.resolve())), 400
 
 @app.errorhandler(413)
 def request_entity_too_large(e):
-    return render_template('index.html', error="The file or input is too large."), 413
+    # Provide all necessary default values to prevent template errors
+    return render_template('index.html', 
+                          error="The file or input is too large.", 
+                          prompt="", 
+                          negative_prompt="", 
+                          seed=None, 
+                          model_id=DEFAULT_MODEL_ID,
+                          default_model=DEFAULT_MODEL_ID,
+                          is_civitai=False,
+                          civitai_id="1637364", 
+                          width=DEFAULT_WIDTH, 
+                          height=DEFAULT_HEIGHT, 
+                          steps=DEFAULT_STEPS, 
+                          guidance_scale=DEFAULT_GUIDANCE_SCALE,
+                          clip_skip=None, 
+                          scheduler=DEFAULT_SCHEDULER, 
+                          scheduler_options=AVAILABLE_SCHEDULERS,
+                          batch_size=1, 
+                          batch_count=1,
+                          loras=[], 
+                          force_civitai=True,
+                          saved_paths=[],
+                          image_filenames=[],
+                          image=None,
+                          images=[],
+                          output_directory_display=str(output_dir.resolve())), 413
 
+# Add a catch-all error handler
+@app.errorhandler(Exception)
+def handle_exception(e):
+    # Print the exception to console for debugging
+    print(f"Unhandled exception: {str(e)}")
+    
+    # If it's an HTTP exception, pass it to the specific handler
+    if isinstance(e, HTTPException):
+        return app.handle_http_exception(e)
+    
+    # For all other exceptions, return a generic 500 error
+    return render_template('index.html', 
+                          error=f"An unexpected error occurred: {str(e)}", 
+                          prompt="", 
+                          negative_prompt="", 
+                          seed=None, 
+                          model_id=DEFAULT_MODEL_ID,
+                          default_model=DEFAULT_MODEL_ID,
+                          is_civitai=False,
+                          civitai_id="1637364", 
+                          width=DEFAULT_WIDTH, 
+                          height=DEFAULT_HEIGHT, 
+                          steps=DEFAULT_STEPS, 
+                          guidance_scale=DEFAULT_GUIDANCE_SCALE,
+                          clip_skip=None, 
+                          scheduler=DEFAULT_SCHEDULER, 
+                          scheduler_options=AVAILABLE_SCHEDULERS,
+                          batch_size=1, 
+                          batch_count=1,
+                          loras=[], 
+                          force_civitai=True,
+                          saved_paths=[],
+                          image_filenames=[],
+                          image=None,
+                          images=[],
+                          output_directory_display=str(output_dir.resolve())), 500
 
 if __name__ == '__main__':
     print("=== SDXL Image Generator Server ===")

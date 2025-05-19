@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SDXL Image Generator</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <!-- Add preload for critical resources -->
+    <link rel="preload" href="{{ url_for('static', filename='js/script.js') }}" as="script">
+    <link rel="preload" href="{{ url_for('static', filename='css/styles.css') }}" as="style">
 </head>
 <body>
     <div class="container">
@@ -50,7 +53,8 @@
                 <div class="gallery">
                     {% for filename in image_filenames %}
                     <div class="gallery-item" data-index="{{ loop.index }}">
-                        <img src="{{ url_for('get_image', filename=filename) }}" alt="Generated image {{ loop.index }}" class="gallery-img" onclick="enlargeImage(this)">
+                        <!-- Add loading="lazy" to all images -->
+                        <img src="{{ url_for('get_image', filename=filename) }}" alt="Generated image {{ loop.index }}" class="gallery-img" onclick="enlargeImage(this)" loading="lazy">
                     </div>
                     {% endfor %}
                 </div>
@@ -140,29 +144,6 @@
                 <div class="progress-fill" id="progress-fill"></div>
             </div>
             <div id="time-estimate">Please wait... Connection active</div>
-            <script>
-                // Add simple loading animation
-                const progressFill = document.getElementById('progress-fill');
-                const timeEstimate = document.getElementById('time-estimate');
-                let progress = 0;
-                const totalTime = 150; // 2.5 minutes estimate
-                
-                // Start indeterminate animation
-                progressFill.style.width = '100%';
-                progressFill.style.animationName = 'move-stripes';
-                
-                // Simple timer during the wait
-                let seconds = 0;
-                // Store timer reference globally so it can be cleared later
-                window.progressTimer = setInterval(() => {
-                    seconds++;
-                    timeEstimate.textContent = `Processing for ${seconds} seconds... Please wait`;
-                    
-                    if (seconds >= 300) { // 5 minutes
-                        timeEstimate.innerHTML = "Still processing... This might take a few more minutes.<br>Large batches and complex prompts take longer.";
-                    }
-                }, 1000);
-            </script>
         </div>
         
         <form method="POST" action="/" id="generate-form">
@@ -434,7 +415,7 @@
         </div>
     </div>
 
-    <!-- Include JavaScript file -->
-    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <!-- Include JavaScript file - load at the end of body -->
+    <script src="{{ url_for('static', filename='js/script.js') }}" defer></script>
 </body>
 </html> 
