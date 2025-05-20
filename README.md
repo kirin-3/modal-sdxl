@@ -151,7 +151,7 @@ elif 'application/json' in response.headers.get('content-type', ''):
 
 - Default model: `stabilityai/stable-diffusion-xl-base-1.0`
 - You can use any SDXL model from Hugging Face or CivitAI
-- For CivitAI models, use the model ID from the URL (e.g., `135867` from `https://civitai.com/models/135867`)
+- For CivitAI models, use the model ID from the Download URL (e.g., `1759168` from `https://civitai.com/api/download/models/1759168?type=Model&format=SafeTensor&size=full&fp=fp16`)
 
 ### LoRA Configuration
 

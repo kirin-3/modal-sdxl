@@ -399,55 +399,7 @@ small {
     flex: 1;
 }
 
-/* Prompt display and copy button */
-.prompt-display {
-    background-color: var(--color-bg-tertiary);
-    padding: var(--spacing-sm);
-    border-radius: var(--border-radius-md);
-    margin-bottom: var(--spacing-md);
-    border-left: 3px solid var(--color-accent-secondary);
-}
-
-.prompt-text {
-    word-break: break-all;
-    white-space: pre-wrap;
-    background-color: rgba(0, 0, 0, 0.2);
-    padding: var(--spacing-sm);
-    border-radius: var(--border-radius-sm);
-    margin-top: 5px;
-}
-
-.prompt-text.negative {
-    border-left: 3px solid var(--color-accent-danger);
-}
-
-.prompt-copy-container {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.prompt-copy-container h4 {
-    margin: 0;
-}
-
-.copy-btn {
-    background-color: var(--color-bg-tertiary);
-    color: var(--color-text-primary);
-    border: 1px solid var(--color-border);
-    padding: 5px 10px;
-    border-radius: var(--border-radius-sm);
-    cursor: pointer;
-    font-size: 14px;
-}
-
-.copy-btn:hover {
-    background-color: var(--color-border);
-}
-
-.copy-icon {
-    margin-right: 5px;
-}
+/* Prompt display and copy button - REMOVED */
 
 /* Screen reader only class */
 .sr-only {

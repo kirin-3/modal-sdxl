@@ -207,22 +207,11 @@ window.addEventListener('keydown', function(event) {
     }
 });
 
-// Copy prompt to clipboard function
+// Copy to clipboard function - kept for potential future use but simplified
 function copyToClipboard(text) {
-    // Create a temporary textarea element to hold the text
-    const textarea = document.createElement('textarea');
-    textarea.value = text;
-    document.body.appendChild(textarea);
-    
-    // Select and copy the text
-    textarea.select();
-    document.execCommand('copy');
-    
-    // Remove the textarea
-    document.body.removeChild(textarea);
-    
-    // Show a toast notification
-    showToast('Copied to clipboard!');
+    navigator.clipboard.writeText(text)
+        .then(() => showToast('Copied to clipboard!'))
+        .catch(err => console.error('Copy failed: ', err));
 }
 
 // Simple toast notification function

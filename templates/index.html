@@ -65,24 +65,6 @@
             {% endif %}
             
             <div class="generation-info">
-                <div class="prompt-display">
-                    <div class="prompt-copy-container">
-                        <h4>Prompt Used:</h4>
-                        <button class="copy-btn" onclick="copyToClipboard('{{ prompt }}')">
-                            <span class="copy-icon">📋</span> Copy Prompt
-                        </button>
-                    </div>
-                    <p class="prompt-text">{{ prompt }}</p>
-                    {% if negative_prompt %}
-                    <div class="prompt-copy-container">
-                        <h4>Negative Prompt:</h4>
-                        <button class="copy-btn" onclick="copyToClipboard('{{ negative_prompt }}')">
-                            <span class="copy-icon">📋</span> Copy Negative
-                        </button>
-                    </div>
-                    <p class="prompt-text negative">{{ negative_prompt }}</p>
-                    {% endif %}
-                </div>
                 <p>
                     Using model: 
                     <strong>

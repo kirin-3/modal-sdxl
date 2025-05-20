@@ -81,6 +81,22 @@ with image.imports():
     import peft  # Import PEFT for LoRA support
     from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer, CLIPTextConfig # Import necessary components
     import safetensors.torch # Import safetensors load
+    
+    # Add GPU memory tracking function
+    def get_gpu_memory_info():
+        """Get GPU memory usage information"""
+        if torch.cuda.is_available():
+            t = torch.cuda.get_device_properties(0).total_memory
+            r = torch.cuda.memory_reserved(0)
+            a = torch.cuda.memory_allocated(0)
+            f = t - (r + a)  # free inside reserved
+            return {
+                "total": t / (1024**2),  # Convert to MB
+                "reserved": r / (1024**2),
+                "allocated": a / (1024**2),
+                "free": f / (1024**2)
+            }
+        return {"error": "CUDA not available"}
 
 
 # Default SDXL model
@@ -115,6 +131,7 @@ class Inference:
     # Track model access times for cache management
     model_last_accessed = {}
     max_loaded_models = 2  # Reduced from 3 to 2 to minimize memory usage
+    loaded_loras = set()  # Track loaded LoRAs to avoid reloading
 
     # List of available schedulers with display names
     AVAILABLE_SCHEDULERS = {
@@ -126,11 +143,15 @@ class Inference:
     def setup(self):
         # Initialize internal state
         self.loaded_models = {}
+        self.loaded_loras = set()  # Track loaded LoRAs to avoid reloading
         
         # Create directories
         os.makedirs(CIVITAI_MODELS_DIR, exist_ok=True)
         os.makedirs(CIVITAI_LORAS_DIR, exist_ok=True)
         os.makedirs(HF_LORAS_DIR, exist_ok=True)
+        
+        # Print initial GPU memory state
+        print(f"Initial GPU memory state: {get_gpu_memory_info()}")
         
         # Only load default model if explicitly requested
         if self.load_default_model:
@@ -138,6 +159,7 @@ class Inference:
             try:
                 self._load_pipeline(DEFAULT_MODEL_ID)
                 print("Default SDXL model loaded successfully")
+                print(f"GPU memory after loading default model: {get_gpu_memory_info()}")
             except Exception as e:
                 print(f"Warning: Failed to pre-load default model: {str(e)}")
                 # Don't fail startup if default model can't load
@@ -610,6 +632,7 @@ class Inference:
         # Check if we need to unload models
         if len(self.loaded_models) > self.max_loaded_models:
             print(f"Cache limit reached ({len(self.loaded_models)} models). Unloading least recently used model.")
+            print(f"GPU memory before unloading: {get_gpu_memory_info()}")
             
             # Find least recently used model
             lru_model_key = min(self.model_last_accessed.items(), key=lambda x: x[1])[0]
@@ -617,13 +640,27 @@ class Inference:
             # Only unload if it's not the model we just loaded
             if lru_model_key != model_key and lru_model_key in self.loaded_models:
                 print(f"Unloading model {lru_model_key} from memory")
-                del self.loaded_models[lru_model_key]
-                del self.model_last_accessed[lru_model_key]
                 
-                # Explicitly clear CUDA cache
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    print(f"Cleared CUDA cache, freeing GPU memory")
+                # Perform deep cleanup
+                try:
+                    # Clean up PEFT adapters if present
+                    self._clean_peft_adapters(self.loaded_models[lru_model_key])
+                    
+                    # Move model to CPU first to free GPU memory
+                    self.loaded_models[lru_model_key].to("cpu")
+                    
+                    # Delete the model
+                    del self.loaded_models[lru_model_key]
+                    del self.model_last_accessed[lru_model_key]
+                    
+                    # Explicitly clear CUDA cache
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()  # Ensure CUDA operations are complete
+                        print(f"Cleared CUDA cache, freeing GPU memory")
+                        print(f"GPU memory after unloading: {get_gpu_memory_info()}")
+                except Exception as e:
+                    print(f"Error during model unloading: {e}")
 
     def _load_pipeline(self, model_id, loras=None):
         """
@@ -633,56 +670,82 @@ class Inference:
             model_id: Base model ID
             loras: List of dictionaries with 'model_id' and 'weight' keys
         """
-        # Create a key that includes the base model and all LoRAs
+        # Create a detailed cache key that includes the base model and all LoRAs
         lora_key = ""
         if loras:
-            lora_ids = [f"{lora['model_id']}:{lora['weight']}" for lora in loras]
+            # Sort loras by model_id to ensure consistent keys regardless of order
+            sorted_loras = sorted(loras, key=lambda x: x.get('model_id', ''))
+            lora_ids = [f"{lora['model_id']}:{lora['weight']}" for lora in sorted_loras]
             lora_key = "_loras_" + "_".join(lora_ids)
             
         model_key = f"{model_id}{lora_key}"
-            
+        
+        print(f"Looking for model with key: {model_key}")
+        print(f"Current loaded models: {list(self.loaded_models.keys())}")
+        print(f"Current GPU memory: {get_gpu_memory_info()}")
+        
         if model_key not in self.loaded_models:
-            print(f"Loading SDXL model: {model_id}")
+            print(f"Model not found in cache. Loading SDXL model: {model_id}")
             try:
+                # Check if we have a similar model already loaded (same base model, different LoRAs)
+                base_model_key = None
+                for key in self.loaded_models.keys():
+                    if key.startswith(model_id) and loras:  # Same base model with LoRAs
+                        base_model_key = key
+                        print(f"Found base model already loaded: {base_model_key}")
+                        break
+                    
                 # Clear CUDA cache before loading a new model
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
                     
                 # Use float16 instead of bfloat16 to fix color issues
-                target_dtype = torch.float16  # Changed from bfloat16
-                # target_dtype = torch.bfloat16 # Keep this as alternative if needed
-                
+                target_dtype = torch.float16
                 print(f"Using torch_dtype: {target_dtype}")
+                
+                # If we found a base model, unload its LoRAs and reuse it instead of loading from scratch
+                if base_model_key and base_model_key in self.loaded_models:
+                    print(f"Reusing base model {model_id} and applying new LoRAs")
+                    pipeline = self.loaded_models[base_model_key]
                     
-                # Check if this is a CivitAI model
-                if model_id.startswith("civitai:"):
-                    model_path, model_filename = self._download_civitai_model(model_id)
+                    # Clean existing LoRAs thoroughly
+                    self._clean_peft_adapters(pipeline)
                     
-                    # Load from local path
-                    print(f"Loading CivitAI SDXL model from {model_path}/{model_filename}")
-                    pipeline = diffusers.StableDiffusionXLPipeline.from_single_file(
-                        f"{model_path}/{model_filename}",
-                        torch_dtype=target_dtype,
-                        use_safetensors=True,
-                    )
-                else:
-                    # Load from Hugging Face
-                    pipeline = diffusers.StableDiffusionXLPipeline.from_pretrained(
-                        model_id,
-                        torch_dtype=target_dtype,
-                        use_safetensors=True,
-                        variant="fp16" if target_dtype == torch.float16 else "bf16",
-                    )
+                    # Remove the old model key
+                    del self.loaded_models[base_model_key]
+                    if base_model_key in self.model_last_accessed:
+                        del self.model_last_accessed[base_model_key]
+                else:    
+                    # Check if this is a CivitAI model
+                    if model_id.startswith("civitai:"):
+                        model_path, model_filename = self._download_civitai_model(model_id)
+                        
+                        # Load from local path
+                        print(f"Loading CivitAI SDXL model from {model_path}/{model_filename}")
+                        pipeline = diffusers.StableDiffusionXLPipeline.from_single_file(
+                            f"{model_path}/{model_filename}",
+                            torch_dtype=target_dtype,
+                            use_safetensors=True,
+                        )
+                    else:
+                        # Load from Hugging Face
+                        pipeline = diffusers.StableDiffusionXLPipeline.from_pretrained(
+                            model_id,
+                            torch_dtype=target_dtype,
+                            use_safetensors=True,
+                            variant="fp16" if target_dtype == torch.float16 else "bf16",
+                        )
                 
                 # VAE FIX: Attempt to load a specific VAE, especially for CivitAI models
-                if model_id.startswith("civitai:") or model_id != DEFAULT_MODEL_ID: # Apply to CivitAI or any non-default HF model
+                if model_id.startswith("civitai:") or model_id != DEFAULT_MODEL_ID:
                     try:
                         print("Attempting to load and set 'madebyollin/sdxl-vae-fp16-fix' VAE")
                         vae = AutoencoderKL.from_pretrained(
                             "madebyollin/sdxl-vae-fp16-fix",
-                            torch_dtype=target_dtype # Use the same dtype for consistency
+                            torch_dtype=target_dtype
                         )
-                        pipeline.vae = vae.to("cuda") # Move VAE to CUDA
+                        pipeline.vae = vae.to("cuda")
                         print("Successfully loaded and set 'madebyollin/sdxl-vae-fp16-fix' VAE.")
                     except Exception as e:
                         print(f"Warning: Could not load 'madebyollin/sdxl-vae-fp16-fix': {e}. Using model's default VAE.")
@@ -733,6 +796,8 @@ class Inference:
                         # Download the LoRA file
                         try:
                             lora_path = self._download_lora(lora_spec)
+                            # Add to loaded LoRAs set to track
+                            self.loaded_loras.add(lora_model_id)
                         except Exception as e:
                             failed_loras.append(f"LoRA {lora_model_id}: Download failed - {str(e)}")
                             continue
@@ -784,12 +849,16 @@ class Inference:
                 
                 # Update model access tracking
                 self._manage_model_memory(model_key)
+                
+                # Print memory usage after loading
+                print(f"GPU memory after loading model: {get_gpu_memory_info()}")
             except Exception as e:
                 print(f"Failed to load SDXL model: {str(e)}")
                 raise ValueError(f"Could not load SDXL model {model_id}: {str(e)}")
                 
         else:
             # Model is already loaded, update access time
+            print(f"Model {model_key} already loaded, reusing from cache")
             self._manage_model_memory(model_key)
                 
         return self.loaded_models[model_key]
@@ -801,10 +870,12 @@ class Inference:
         Args:
             pipeline: The diffusers pipeline to clean
         """
+        print("Starting deep PEFT adapter cleanup")
         try:
             # Method 1: Standard unload_lora_weights
             if hasattr(pipeline, "unload_lora_weights"):
                 pipeline.unload_lora_weights()
+                print("Called unload_lora_weights")
                 
             # Method 2: Remove PEFT configs explicitly from UNet
             if hasattr(pipeline, "unet"):
@@ -821,16 +892,56 @@ class Inference:
             # Method 4: Reset all LoRA layers
             if hasattr(pipeline, "unet"):
                 from diffusers.models.lora import LoRACompatibleLinear
+                from peft.tuners.lora import LoraLayer
                 
+                # Clean UNet LoRA layers
                 for module in pipeline.unet.modules():
                     if isinstance(module, LoRACompatibleLinear) and hasattr(module, "lora_layer"):
-                        print("Resetting LoRA layer")
+                        print("Resetting UNet LoRA layer")
                         module.lora_layer = None
-                        
-            print("Cleaned PEFT adapter state")
+                    elif hasattr(module, "_lora_layer"):
+                        print("Resetting _lora_layer")
+                        module._lora_layer = None
+                    # Also check for PEFT's direct LoraLayer implementations
+                    elif isinstance(module, LoraLayer):
+                        print("Resetting PEFT LoraLayer")
+                        # Reset the layer's parameters
+                        if hasattr(module, "lora_A"):
+                            module.lora_A.data.zero_()
+                        if hasattr(module, "lora_B"):
+                            module.lora_B.data.zero_()
+                
+            # Clean text encoder LoRA layers too
+            for encoder in [pipeline.text_encoder, pipeline.text_encoder_2]:
+                if encoder is not None:
+                    for module in encoder.modules():
+                        if isinstance(module, LoRACompatibleLinear) and hasattr(module, "lora_layer"):
+                            print("Resetting text encoder LoRA layer")
+                            module.lora_layer = None
+                        elif hasattr(module, "_lora_layer"):
+                            print("Resetting text encoder _lora_layer")
+                            module._lora_layer = None
+                        elif isinstance(module, LoraLayer):
+                            print("Resetting text encoder PEFT LoraLayer")
+                            if hasattr(module, "lora_A"):
+                                module.lora_A.data.zero_()
+                            if hasattr(module, "lora_B"):
+                                module.lora_B.data.zero_()
+                
+            # Method 5: Clean any active adapters list
+            if hasattr(pipeline, "active_adapters"):
+                pipeline.active_adapters = None
+                print("Reset active_adapters")
+                
+            print("Completed PEFT adapter cleanup")
             
+            # Force a CUDA cache cleanup
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                
         except Exception as e:
-            print(f"Warning during adapter cleanup: {str(e)}")
+            print(f"Warning during adapter cleanup: {e}")
             
     @modal.method()
     def run(
@@ -848,12 +959,16 @@ class Inference:
         clip_skip: Optional[int] = None,
         scheduler: Optional[SchedulerType] = None,
     ) -> list[bytes]:
+        # Print memory usage at start
+        print(f"GPU memory before run: {get_gpu_memory_info()}")
+        
         # Use default model if none specified
         actual_model_id = model_id if model_id else DEFAULT_MODEL_ID
         
         # Clear CUDA cache before loading
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            torch.cuda.synchronize()
             
         # Get the appropriate pipeline
         pipe = self._load_pipeline(actual_model_id, loras)
@@ -949,54 +1064,77 @@ class Inference:
                 )
             print(f"Applied scheduler: {pipe.scheduler.__class__.__name__}")
 
-        # --- Encode prompts using the chunking logic ---
-        (
-            prompt_embeds,
-            negative_prompt_embeds,
-            pooled_prompt_embeds,
-            negative_pooled_prompt_embeds,
-        ) = self._encode_prompt_chunked(
-            pipe=pipe,
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            device=pipe.device, # Use the pipeline's device
-            batch_size=1  # Changed from batch_size to 1
-        )
-        
-        # Manually repeat the embeddings for batch_size if needed, exactly once
-        if batch_size > 1:
-            prompt_embeds = prompt_embeds.repeat(batch_size, 1, 1)
-            negative_prompt_embeds = negative_prompt_embeds.repeat(batch_size, 1, 1)
-            pooled_prompt_embeds = pooled_prompt_embeds.repeat(batch_size, 1)
-            negative_pooled_prompt_embeds = negative_pooled_prompt_embeds.repeat(batch_size, 1)
-            print(f"Expanded embeds for batch_size={batch_size}")
-
-        # Generate the image
-        images = pipe(
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            pooled_prompt_embeds=pooled_prompt_embeds,
-            negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
-            num_images_per_prompt=1,  # Changed from batch_size to 1
-            num_inference_steps=steps,
-            guidance_scale=gs,
-            width=width,
-            height=height,
-            generator=generator,
-        ).images
-
-
-        image_output = []
-        for image in images:
-            with io.BytesIO() as buf:
-                image.save(buf, format="PNG")
-                image_output.append(buf.getvalue())
-
-        # Ensure CUDA cache is cleared after generation to reduce fragmentation
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        try:
+            # --- Encode prompts using the chunking logic ---
+            (
+                prompt_embeds,
+                negative_prompt_embeds,
+                pooled_prompt_embeds,
+                negative_pooled_prompt_embeds,
+            ) = self._encode_prompt_chunked(
+                pipe=pipe,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                device=pipe.device, # Use the pipeline's device
+                batch_size=1  # Changed from batch_size to 1
+            )
             
-        return image_output
+            # Manually repeat the embeddings for batch_size if needed, exactly once
+            if batch_size > 1:
+                prompt_embeds = prompt_embeds.repeat(batch_size, 1, 1)
+                negative_prompt_embeds = negative_prompt_embeds.repeat(batch_size, 1, 1)
+                pooled_prompt_embeds = pooled_prompt_embeds.repeat(batch_size, 1)
+                negative_pooled_prompt_embeds = negative_pooled_prompt_embeds.repeat(batch_size, 1)
+                print(f"Expanded embeds for batch_size={batch_size}")
+
+            # Print memory before generation
+            print(f"GPU memory before generation: {get_gpu_memory_info()}")
+            
+            # Generate the image
+            images = pipe(
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
+                pooled_prompt_embeds=pooled_prompt_embeds,
+                negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
+                num_images_per_prompt=1,  # Changed from batch_size to 1
+                num_inference_steps=steps,
+                guidance_scale=gs,
+                width=width,
+                height=height,
+                generator=generator,
+            ).images
+            
+            print(f"GPU memory after generation: {get_gpu_memory_info()}")
+
+            # Move embeddings to CPU to free memory
+            del prompt_embeds
+            del negative_prompt_embeds
+            del pooled_prompt_embeds
+            del negative_pooled_prompt_embeds
+            
+            image_output = []
+            for image in images:
+                with io.BytesIO() as buf:
+                    image.save(buf, format="PNG")
+                    image_output.append(buf.getvalue())
+
+            # Ensure CUDA cache is cleared after generation to reduce fragmentation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                
+            # Print memory after cleanup
+            print(f"GPU memory after run and cleanup: {get_gpu_memory_info()}")
+            
+            return image_output
+        
+        except Exception as e:
+            print(f"Error during image generation: {e}")
+            # Ensure CUDA cache is cleared in case of error
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            raise e
 
     @modal.fastapi_endpoint(docs=True)
     def web(
