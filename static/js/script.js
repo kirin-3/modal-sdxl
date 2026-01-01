@@ -176,7 +176,6 @@ const UIComponents = {
         }
     },
     
-    // LoRA preview has been removed
 };
 
 // Function to open the image modal

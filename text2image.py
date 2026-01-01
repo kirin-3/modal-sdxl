@@ -116,6 +116,20 @@ MAX_TOKEN_LENGTH = 77
 cache_volume = modal.Volume.from_name("hf-hub-cache", create_if_missing=True)
 
 
+def parse_loras(loras_json: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+    """Parses a JSON string of LoRAs into a list of dictionaries."""
+    if not loras_json:
+        return None
+    try:
+        lora_list = json.loads(loras_json)
+        if not isinstance(lora_list, list):
+            lora_list = [lora_list]
+        return lora_list
+    except Exception as e:
+        print(f"Error parsing LoRAs: {str(e)}")
+        return None
+
+
 @app.cls(
     image=image,
     gpu=GPU_TYPE,
@@ -1154,15 +1168,7 @@ class Inference:
         scheduler: Optional[SchedulerType] = None,
     ):
         # Parse the loras from JSON string if provided
-        lora_list = None
-        if loras:
-            try:
-                lora_list = json.loads(loras)
-                if not isinstance(lora_list, list):
-                    lora_list = [lora_list]  # Convert single object to list
-            except Exception as e:
-                print(f"Error parsing LoRAs: {str(e)}")
-                # Continue without LoRAs
+        lora_list = parse_loras(loras)
         
         # Validate batch parameters to reasonable ranges
         batch_size = min(max(1, batch_size), 4)  # Limit to 1-4 images per batch
@@ -1250,15 +1256,7 @@ def entrypoint(
     scheduler: Optional[SchedulerType] = None,
 ):
     # Parse the loras from JSON string if provided
-    lora_list = None
-    if loras:
-        try:
-            lora_list = json.loads(loras)
-            if not isinstance(lora_list, list):
-                lora_list = [lora_list]  # Convert single object to list
-        except Exception as e:
-            print(f"Error parsing LoRAs: {str(e)}")
-            # Continue without LoRAs
+    lora_list = parse_loras(loras)
 
     print(
         f"prompt => {prompt}",
