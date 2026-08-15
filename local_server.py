@@ -1,84 +1,38 @@
-from flask import Flask, render_template, request, send_file, session, redirect, url_for, flash
-import requests
-import io
-import os
-import json
 import base64
-from dotenv import load_dotenv
+import io
+import json
+import os
 import re
 import time
-from pathlib import Path
 from datetime import datetime
-from werkzeug.serving import WSGIRequestHandler
-from werkzeug.exceptions import HTTPException
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# Set longer timeouts for the Werkzeug server
-WSGIRequestHandler.protocol_version = "HTTP/1.1"
-WSGIRequestHandler.timeout = 1800  # 30 minutes timeout
+import httpx
+import uvicorn
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
+from PIL import Image
 
-# Override handle_one_request method to better handle long-running connections
-original_handle = WSGIRequestHandler.handle_one_request
-
-def patched_handle_one_request(self):
-    try:
-        return original_handle(self)
-    except (ConnectionResetError, BrokenPipeError) as e:
-        print(f"Connection error handled gracefully: {str(e)}")
-        return
-
-WSGIRequestHandler.handle_one_request = patched_handle_one_request
-
-# Load environment variables
+# Load environment configuration
 load_dotenv()
 
-# Ensure the templates directory exists
-templates_dir = Path("templates")
-templates_dir.mkdir(exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+TEMPLATES_DIR = BASE_DIR / "templates"
+OUTPUT_DIR = BASE_DIR / "generated_images"
+HISTORY_FILE = OUTPUT_DIR / "history.json"
 
-# Create a directory for saved images
-output_dir = Path("generated_images")
-output_dir.mkdir(exist_ok=True)
+STATIC_DIR.mkdir(exist_ok=True)
+TEMPLATES_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(exist_ok=True)
 
-app = Flask(__name__)
-# Use environment variable for secret key or fallback to a fixed development key
-app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev-secret-key-stable-for-restarts')
-
-# Configure Flask for long-running requests
-app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
-app.config['PROPAGATE_EXCEPTIONS'] = True
-
-app.config.update(
-    SESSION_COOKIE_SECURE=False,
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax',
-    PERMANENT_SESSION_LIFETIME=1800,
-    SESSION_USE_SIGNER=False
-)
-
-@app.after_request
-def add_response_headers(response):
-    response.headers['Connection'] = 'keep-alive'
-    response.headers['Keep-Alive'] = 'timeout=1800'
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    return response
-
-# Helper function for slugifying prompt text
-def slugify(text):
-    """Convert text to a URL-friendly format"""
-    text = re.sub(r'[^\w\s-]', '', text.lower())
-    return re.sub(r'[-\s]+', '-', text).strip('-_')
-
-# Custom template filter for base64 encoding
-@app.template_filter('b64encode')
-def b64encode_filter(data):
-    if data:
-        return base64.b64encode(data).decode('utf-8')
-    return ''
-
-# Constants
+# Default constants
 DEFAULT_MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
 DEFAULT_WIDTH = 1024
 DEFAULT_HEIGHT = 1024
@@ -87,359 +41,388 @@ DEFAULT_GUIDANCE_SCALE = 7.5
 DEFAULT_SCHEDULER = "euler_ancestral"
 
 AVAILABLE_SCHEDULERS = {
-    "euler_ancestral": "Euler Ancestral (Best overall, default)",
-    "dpmpp_2m_karras": "DPM++ 2M Karras (High quality, faster)"
+    "euler_ancestral": "Euler Ancestral (Best overall, creative)",
+    "dpmpp_2m_karras": "DPM++ 2M Karras (Sharp, high quality)",
+    "dpmpp_sde_karras": "DPM++ SDE Karras (Rich details)",
+    "unipc": "UniPC (Fast convergence)",
+    "euler": "Euler (Classic, smooth)",
+    "ddim": "DDIM (Deterministic)",
 }
 
-def get_default_context():
-    """Returns the default context variables for the template."""
-    return {
-        'prompt': "",
-        'negative_prompt': "",
-        'seed': None,
-        'model_id': DEFAULT_MODEL_ID,
-        'default_model': DEFAULT_MODEL_ID,
-        'is_civitai': False,
-        'civitai_id': "1637364",
-        'width': DEFAULT_WIDTH,
-        'height': DEFAULT_HEIGHT,
-        'steps': DEFAULT_STEPS,
-        'guidance_scale': DEFAULT_GUIDANCE_SCALE,
-        'clip_skip': None,
-        'scheduler': DEFAULT_SCHEDULER,
-        'scheduler_options': AVAILABLE_SCHEDULERS,
-        'batch_size': 1,
-        'batch_count': 1,
-        'loras': [],
-        'force_civitai': True,
-        'saved_paths': [],
-        'image_filenames': [],
-        'image': None,
-        'images': [],
-        'output_directory_display': str(output_dir.resolve()),
-        'error': None
+BUILTIN_PRESETS = {
+    "photorealistic": {
+        "name": "Photorealistic",
+        "prompt_suffix": ", 8k resolution, raw photo, highly detailed, realistic lighting, f/1.8 lens, DSLR",
+        "negative_prompt": "cartoon, illustration, 3d render, painting, oversaturated, blurry, bad anatomy, deformed",
+        "steps": 35,
+        "guidance_scale": 7.0,
+        "scheduler": "dpmpp_2m_karras",
+    },
+    "cinematic": {
+        "name": "Cinematic Film",
+        "prompt_suffix": ", 35mm photograph, film grain, cinematic lighting, masterpiece, anamorphic lens, shallow depth of field",
+        "negative_prompt": "digital art, low quality, flat lighting, amateur, watermark, signature",
+        "steps": 30,
+        "guidance_scale": 7.5,
+        "scheduler": "euler_ancestral",
+    },
+    "anime": {
+        "name": "Anime / Manga",
+        "prompt_suffix": ", anime aesthetic, vibrant colors, clean linework, studio quality, makoto shinkai style",
+        "negative_prompt": "photorealistic, 3d, western comic, blurry, lowres, bad hands, missing fingers",
+        "steps": 28,
+        "guidance_scale": 8.0,
+        "scheduler": "euler_ancestral",
+    },
+    "digital_art": {
+        "name": "Digital Painting",
+        "prompt_suffix": ", digital art, concept art, trending on artstation, detailed illustration, dynamic lighting, sharp focus",
+        "negative_prompt": "photo, photorealistic, ugly, distorted, low quality, artifacting",
+        "steps": 30,
+        "guidance_scale": 7.5,
+        "scheduler": "euler_ancestral",
+    },
+    "cyberpunk": {
+        "name": "Cyberpunk Neon",
+        "prompt_suffix": ", cyberpunk city, neon lights, volumetric fog, dark night, futuristic, ray tracing, highly detailed",
+        "negative_prompt": "daylight, sunny, rustic, vintage, lowres, blurry",
+        "steps": 32,
+        "guidance_scale": 8.0,
+        "scheduler": "dpmpp_sde_karras",
+    },
+}
+
+
+# ==============================================================================
+# Pydantic Schemas
+# ==============================================================================
+
+class LoRAItem(BaseModel):
+    model_id: str
+    weight: float = 0.75
+
+
+class FreeUItem(BaseModel):
+    enabled: bool = False
+    s1: float = 0.9
+    s2: float = 0.2
+    b1: float = 1.3
+    b2: float = 1.4
+
+
+class GeneratePayload(BaseModel):
+    prompt: str
+    negative_prompt: str = ""
+    batch_size: int = Field(default=1, ge=1, le=4)
+    batch_count: int = Field(default=1, ge=1, le=4)
+    seed: Optional[int] = None
+    model_id: str = DEFAULT_MODEL_ID
+    width: int = Field(default=DEFAULT_WIDTH, ge=512, le=2048)
+    height: int = Field(default=DEFAULT_HEIGHT, ge=512, le=2048)
+    steps: int = Field(default=DEFAULT_STEPS, ge=1, le=150)
+    guidance_scale: float = Field(default=DEFAULT_GUIDANCE_SCALE, ge=1.0, le=20.0)
+    clip_skip: Optional[int] = Field(default=None, ge=1, le=4)
+    scheduler: str = DEFAULT_SCHEDULER
+    loras: Optional[List[LoRAItem]] = None
+    freeu: Optional[FreeUItem] = None
+
+
+# ==============================================================================
+# FastAPI Application & Async Client
+# ==============================================================================
+
+app = FastAPI(
+    title="SDXL Image Generator",
+    description="Modern Asynchronous Local Server for Modal SDXL Inference",
+    version="2.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+def slugify(text: str) -> str:
+    """Convert prompt text to URL-friendly filename segment."""
+    clean = re.sub(r"[^\w\s-]", "", text.lower())
+    return re.sub(r"[-\s]+", "-", clean).strip("-_")[:40] or "image"
+
+
+def load_history() -> List[Dict[str, Any]]:
+    """Load history index from disk."""
+    if HISTORY_FILE.exists():
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+def save_history_entry(entry: Dict[str, Any]):
+    """Prepend entry to history index file."""
+    history = load_history()
+    history.insert(0, entry)
+    # Keep last 100 entries
+    history = history[:100]
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        print(f"Error saving history: {e}")
+
+
+def parse_png_metadata(image_bytes: bytes) -> Dict[str, Any]:
+    """Extract standard A1111 / JSON generation parameters from PNG chunks."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        info = img.info or {}
+
+        # 1. Try structured JSON metadata
+        if "sdxl_metadata" in info:
+            return json.loads(info["sdxl_metadata"])
+
+        # 2. Try A1111 parameters chunk
+        if "parameters" in info:
+            raw = info["parameters"]
+            lines = raw.strip().split("\n")
+            meta: Dict[str, Any] = {"raw_parameters": raw}
+
+            if len(lines) >= 1:
+                meta["prompt"] = lines[0]
+            if len(lines) >= 2 and lines[1].startswith("Negative prompt:"):
+                meta["negative_prompt"] = lines[1].replace("Negative prompt:", "").strip()
+
+            # Parse parameter key-values from last line
+            last_line = lines[-1]
+            for match in re.finditer(r"([A-Za-z ]+):\s*([^,]+)", last_line):
+                k = match.group(1).strip().lower().replace(" ", "_")
+                v = match.group(2).strip()
+                if k == "steps":
+                    meta["steps"] = int(v)
+                elif k == "sampler":
+                    meta["scheduler"] = v
+                elif k == "cfg_scale":
+                    meta["guidance_scale"] = float(v)
+                elif k == "seed":
+                    meta["seed"] = int(v)
+                elif k == "size":
+                    if "x" in v:
+                        w, h = v.split("x")
+                        meta["width"] = int(w)
+                        meta["height"] = int(h)
+                elif k == "model":
+                    meta["model_id"] = v
+                elif k == "clip_skip":
+                    meta["clip_skip"] = int(v)
+
+            return meta
+
+        return {"prompt": info.get("prompt", ""), "negative_prompt": info.get("negative_prompt", "")}
+    except Exception as e:
+        return {"error": f"Failed to extract metadata: {str(e)}"}
+
+
+# ==============================================================================
+# Routes
+# ==============================================================================
+
+@app.get("/", response_class=HTMLResponse)
+async def index_page(request: Request):
+    """Render the primary single-page UI."""
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={
+            "default_model": DEFAULT_MODEL_ID,
+            "default_width": DEFAULT_WIDTH,
+            "default_height": DEFAULT_HEIGHT,
+            "default_steps": DEFAULT_STEPS,
+            "default_guidance_scale": DEFAULT_GUIDANCE_SCALE,
+            "default_scheduler": DEFAULT_SCHEDULER,
+            "schedulers": AVAILABLE_SCHEDULERS,
+            "presets": BUILTIN_PRESETS,
+            "output_directory": str(OUTPUT_DIR.resolve()),
+        },
+    )
+
+
+@app.get("/api/presets")
+async def get_presets():
+    """Retrieve available prompt style presets."""
+    return BUILTIN_PRESETS
+
+
+@app.get("/api/history")
+async def get_history():
+    """Retrieve indexed generation history."""
+    return load_history()
+
+
+@app.post("/api/metadata")
+async def extract_metadata(file: UploadFile = File(...)):
+    """Extract embedded generation parameters from an uploaded PNG."""
+    content = await file.read()
+    return parse_png_metadata(content)
+
+
+@app.get("/images/{filename}")
+async def serve_image(filename: str):
+    """Serve generated image from local disk with caching headers."""
+    safe_name = Path(filename).name
+    file_path = OUTPUT_DIR / safe_name
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(
+        file_path,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@app.post("/api/generate")
+async def generate_images(payload: GeneratePayload):
+    """
+    Proxy generation request asynchronously to remote Modal endpoint,
+    save results to disk, and index metadata.
+    """
+    endpoint = os.getenv("MODAL_ENDPOINT", "").strip()
+    if not endpoint:
+        raise HTTPException(
+            status_code=500,
+            detail="MODAL_ENDPOINT is not configured in .env. Please deploy your Modal app and update .env.",
+        )
+
+    # Normalize Modal endpoint URL for POST
+    if not endpoint.endswith("/generate") and not endpoint.endswith(".modal.run"):
+        pass
+
+    modal_request_data = {
+        "prompt": payload.prompt,
+        "negative_prompt": payload.negative_prompt,
+        "batch_size": payload.batch_size,
+        "batch_count": payload.batch_count,
+        "seed": payload.seed,
+        "model_id": payload.model_id,
+        "width": payload.width,
+        "height": payload.height,
+        "num_inference_steps": payload.steps,
+        "guidance_scale": payload.guidance_scale,
+        "clip_skip": payload.clip_skip,
+        "scheduler": payload.scheduler,
+        "loras": [l.model_dump() for l in payload.loras] if payload.loras else None,
+        "freeu": payload.freeu.model_dump() if payload.freeu else None,
     }
 
-def validate_and_extract_params(form):
-    """Validates form input and extracts generation parameters."""
-    params = {}
-    context_update = {}
-    
-    # Basic text fields
-    params['prompt'] = form.get('prompt', '')
-    params['negative_prompt'] = form.get('negative_prompt', '')
-    context_update['prompt'] = params['prompt']
-    context_update['negative_prompt'] = params['negative_prompt']
+    start_time = time.time()
+    timeout = httpx.Timeout(1800.0, connect=60.0)
 
-    # Seed
-    seed_input = form.get('seed', '')
-    if seed_input and seed_input.strip():
-        try:
-            params['seed'] = int(seed_input)
-            context_update['seed'] = params['seed']
-        except ValueError:
-            return None, None, "Seed must be an integer"
-    
-    # Batch parameters
     try:
-        batch_size = int(form.get('batch_size', 1))
-        batch_size = max(1, min(batch_size, 4))
-        params['batch_size'] = batch_size
-    except ValueError:
-        params['batch_size'] = 1
-    
-    try:
-        batch_count = int(form.get('batch_count', 1))
-        batch_count = max(1, min(batch_count, 4))
-        params['batch_count'] = batch_count
-    except ValueError:
-        params['batch_count'] = 1
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            # Try POST to /generate endpoint or base endpoint
+            target_url = endpoint
+            if not target_url.endswith("/generate"):
+                if target_url.endswith("/"):
+                    target_url += "generate"
+                else:
+                    target_url += "/generate"
 
-    # Safety limit for total images
-    if params['batch_size'] * params['batch_count'] > 8:
-         if params['batch_size'] > 2: params['batch_size'] = 2
-         params['batch_count'] = min(params['batch_count'], 4)
-         print(f"Reduced batch parameters: size={params['batch_size']}, count={params['batch_count']}")
-    
-    context_update['batch_size'] = params['batch_size']
-    context_update['batch_count'] = params['batch_count']
+            response = await client.post(target_url, json=modal_request_data)
 
-    # Dimensions
-    try:
-        width = int(form.get('width', DEFAULT_WIDTH))
-        params['width'] = width if 512 <= width <= 2048 else DEFAULT_WIDTH
-    except ValueError:
-        params['width'] = DEFAULT_WIDTH
-    
-    try:
-        height = int(form.get('height', DEFAULT_HEIGHT))
-        params['height'] = height if 512 <= height <= 2048 else DEFAULT_HEIGHT
-    except ValueError:
-        params['height'] = DEFAULT_HEIGHT
+            # Fallback to base URL if /generate 404s
+            if response.status_code == 404:
+                response = await client.post(endpoint, json=modal_request_data)
 
-    context_update['width'] = params['width']
-    context_update['height'] = params['height']
+            response.raise_for_status()
 
-    # Steps & Guidance
-    try:
-        steps = int(form.get('steps', DEFAULT_STEPS))
-        params['steps'] = steps if 1 <= steps <= 150 else DEFAULT_STEPS
-    except ValueError:
-        params['steps'] = DEFAULT_STEPS
-    
-    try:
-        scale = float(form.get('guidance_scale', DEFAULT_GUIDANCE_SCALE))
-        params['guidance_scale'] = scale if 1.0 <= scale <= 20.0 else DEFAULT_GUIDANCE_SCALE
-    except ValueError:
-        params['guidance_scale'] = DEFAULT_GUIDANCE_SCALE
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=504,
+            detail="Generation timed out on Modal. Try fewer steps or smaller batch size.",
+        )
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not connect to Modal endpoint at {endpoint}. Ensure the app is deployed.",
+        )
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"Modal endpoint returned error: {e.response.text}",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error communicating with Modal: {str(e)}",
+        )
 
-    context_update['steps'] = params['steps']
-    context_update['guidance_scale'] = params['guidance_scale']
-
-    # Clip Skip
-    clip_skip_input = form.get('clip_skip', '')
-    if clip_skip_input and clip_skip_input.strip():
-        try:
-            val = int(clip_skip_input)
-            if 1 <= val <= 4:
-                params['clip_skip'] = val
-                context_update['clip_skip'] = val
-        except ValueError:
-            pass
-    
-    # Scheduler
-    scheduler = form.get('scheduler', DEFAULT_SCHEDULER)
-    if scheduler not in AVAILABLE_SCHEDULERS:
-        scheduler = DEFAULT_SCHEDULER
-    params['scheduler'] = scheduler
-    context_update['scheduler'] = scheduler
-
-    # Model Selection
-    model_source = form.get('model_source', 'civitai')
-    if model_source == 'huggingface':
-        model_id = form.get('model_id', DEFAULT_MODEL_ID).strip() or DEFAULT_MODEL_ID
-        params['model_id'] = model_id
-        context_update['model_id'] = model_id
-        context_update['is_civitai'] = False
-        context_update['civitai_id'] = ""
-    else:
-        civitai_id = form.get('civitai_id', '').strip()
-        if civitai_id:
-            params['model_id'] = f"civitai:{civitai_id}"
-            context_update['civitai_id'] = civitai_id
-            context_update['is_civitai'] = True
-            context_update['model_id'] = params['model_id'] 
-        else:
-            return None, context_update, "Please enter a CivitAI model ID"
-
-    # LoRAs
-    loras = []
-    for i in range(1, 6):
-        if form.get(f'lora{i}_enabled') == 'on':
-            source = form.get(f'lora{i}_source')
-            l_id = form.get(f'lora{i}_id', '').strip()
-            l_weight_val = form.get(f'lora{i}_weight', 0.75)
-            
-            try:
-                weight = float(l_weight_val)
-                weight = weight if 0.1 <= weight <= 2.0 else 0.75
-            except ValueError:
-                weight = 0.75
-            
-            if l_id:
-                prefix = "civitai:" if source == 'civitai' else "hf:"
-                loras.append({'model_id': f"{prefix}{l_id}", 'weight': weight})
-    
-    if loras:
-        params['loras'] = json.dumps(loras)
-        context_update['loras'] = loras # Store as list (dicts) for template rendering
-
-    return params, context_update, None
-
-def generate_image_task(params):
-    """Calls the Modal API to generate images."""
-    modal_endpoint = os.getenv('MODAL_ENDPOINT', '')
-    if not modal_endpoint:
-        raise ValueError("Modal endpoint URL not configured.")
-
-    # Calculate timeout
-    timeout_seconds = 300 + (params.get('batch_count', 1) - 1) * 120 + (params.get('batch_size', 1) - 1) * 60
-    # Add extra time for cold starts or downloads
-    if params.get('model_id') != DEFAULT_MODEL_ID or 'loras' in params:
-        timeout_seconds += 180
-    
-    session = requests.Session()
-    adapter = requests.adapters.HTTPAdapter(max_retries=3, pool_connections=5, pool_maxsize=10)
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
-    
-    headers = {
-        'Connection': 'keep-alive', 
-        'Keep-Alive': 'timeout=600, max=1000', 
-        'User-Agent': 'SDXL-Generator/1.0'
-    }
-
-    model_display = params.get('model_id')
-    print(f"Generating SDXL image with model: {model_display}")
-    print(f"Using request timeout of {timeout_seconds} seconds")
-    
-    try:
-        response = session.get(modal_endpoint, params=params, timeout=timeout_seconds, headers=headers)
-        response.raise_for_status()
-        return response
-    except requests.exceptions.Timeout:
-        raise ValueError("The request timed out. Try with a smaller batch size or fewer steps.")
-    except requests.exceptions.ConnectionError:
-        raise ValueError("Connection error. The server may be temporarily unavailable.")
-    except requests.exceptions.RequestException as e:
-        raise ValueError(f"Error from Modal API: {str(e)}")
-
-def save_images(response, prompt):
-    """Processes the API response and saves images to disk."""
-    content_type = response.headers.get('content-type', '')
-    saved_paths = []
-    filenames = []
+    # Process response
+    saved_filenames = []
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    prompt_slug = slugify(prompt[:50])
+    prompt_slug = slugify(payload.prompt)
 
-    if 'application/json' in content_type:
+    content_type = response.headers.get("content-type", "")
+
+    if "application/json" in content_type:
         try:
             data = response.json()
-            images = data.get('images', [])
-            print(f"Received {len(images)} images in JSON response")
-            
-            for i, b64_img in enumerate(images):
-                try:
-                    img_bytes = base64.b64decode(b64_img)
-                    filename = f"{timestamp}_{prompt_slug}_{i+1}.png"
-                    save_path = output_dir / filename
-                    with open(save_path, 'wb') as f:
-                        f.write(img_bytes)
-                    saved_paths.append(str(save_path))
-                    filenames.append(filename)
-                    print(f"Saved image to {save_path}")
-                except Exception as img_err:
-                    print(f"Error processing image {i+1}: {str(img_err)}")
-        except Exception as e:
-            raise ValueError(f"Error processing JSON response: {str(e)}")
+            images_b64 = data.get("images", [])
+            for idx, b64_str in enumerate(images_b64):
+                img_bytes = base64.b64decode(b64_str)
+                filename = f"{timestamp}_{prompt_slug}_{idx+1}.png"
+                file_path = OUTPUT_DIR / filename
+                with open(file_path, "wb") as f:
+                    f.write(img_bytes)
+                saved_filenames.append(filename)
+        except Exception as json_err:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to process JSON images from Modal: {str(json_err)}",
+            )
     else:
-        # Binary response (single image)
-        try:
-            filename = f"{timestamp}_{prompt_slug}.png"
-            save_path = output_dir / filename
-            with open(save_path, 'wb') as f:
-                f.write(response.content)
-            saved_paths.append(str(save_path))
-            filenames.append(filename)
-            print(f"Saved image to {save_path}")
-        except Exception as e:
-            raise ValueError(f"Error saving image: {str(e)}")
-    
-    if not saved_paths:
-         raise ValueError("No images were returned or saved.")
-         
-    return saved_paths, filenames
+        # Binary image response
+        filename = f"{timestamp}_{prompt_slug}.png"
+        file_path = OUTPUT_DIR / filename
+        with open(file_path, "wb") as f:
+            f.write(response.content)
+        saved_filenames.append(filename)
 
-@app.route('/', methods=['GET', 'POST'])
-def index():
-    context = get_default_context()
-    
-    # Initialize default LoRAs for GET requests if no session data
-    if request.method == 'GET' and not ('generation_data' in session):
-         context['loras'] = [
-            {'model_id': 'civitai:1681903', 'weight': 2.0},
-            {'model_id': 'civitai:1764869', 'weight': 0.75}
-        ]
+    elapsed = round(time.time() - start_time, 2)
 
-    if request.method == 'POST':
-        # Set a 5-minute timeout for the request object itself
-        request.environ.get('werkzeug.server.shutdown')
+    # Save to history index
+    history_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "display_time": datetime.now().strftime("%b %d, %H:%M:%S"),
+        "filenames": saved_filenames,
+        "prompt": payload.prompt,
+        "negative_prompt": payload.negative_prompt,
+        "parameters": payload.model_dump(),
+        "duration_seconds": elapsed,
+    }
+    save_history_entry(history_entry)
 
-        params, context_update, error = validate_and_extract_params(request.form)
-        
-        # Update context with form values so user doesn't lose input
-        if context_update:
-            context.update(context_update)
-        
-        if error:
-            context['error'] = error
-            return render_template('index.html', **context)
-        
-        try:
-            response = generate_image_task(params)
-            
-            if response.status_code == 200:
-                saved_paths, filenames = save_images(response, params['prompt'])
-                
-                context['saved_paths'] = saved_paths
-                context['image_filenames'] = filenames
-                flash('Images generated successfully!', 'success')
-            else:
-                context['error'] = f"Error from Modal API: {response.status_code} - {response.text}"
-                
-        except ValueError as e:
-            context['error'] = str(e)
-        except Exception as e:
-            print(f"Unexpected error: {e}")
-            context['error'] = f"An unexpected error occurred: {str(e)}"
+    return {
+        "success": True,
+        "images": saved_filenames,
+        "image_urls": [f"/images/{name}" for name in saved_filenames],
+        "duration_seconds": elapsed,
+        "parameters": payload.model_dump(),
+    }
 
-    return render_template('index.html', **context)
 
-@app.route('/images/<path:filename>')
-def get_image(filename):
-    """Serve images from the generated_images directory"""
-    try:
-        safe_filename = Path(filename).name
-        image_path = output_dir / safe_filename
-        
-        if image_path.exists() and image_path.is_file():
-            response = send_file(image_path, mimetype='image/png')
-            response.headers['Cache-Control'] = 'public, max-age=3600'
-            return response
-        else:
-            return "Image not found", 404
-    except Exception as e:
-        print(f"Error serving image {filename}: {str(e)}")
-        return "Error serving image", 500
+# ==============================================================================
+# Server Entrypoint
+# ==============================================================================
 
-# Error handlers
-@app.errorhandler(404)
-def page_not_found(e):
-    context = get_default_context()
-    context['error'] = "Page not found. Please go back to the main page."
-    return render_template('index.html', **context), 404
-
-@app.errorhandler(500)
-def server_error(e):
-    context = get_default_context()
-    context['error'] = "An internal server error occurred. Please try again later."
-    return render_template('index.html', **context), 500
-
-@app.errorhandler(400)
-def bad_request(e):
-    context = get_default_context()
-    context['error'] = "Bad request. Please check your input."
-    return render_template('index.html', **context), 400
-
-@app.errorhandler(413)
-def request_entity_too_large(e):
-    context = get_default_context()
-    context['error'] = "The file or input is too large."
-    return render_template('index.html', **context), 413
-
-@app.errorhandler(Exception)
-def handle_exception(e):
-    print(f"Unhandled exception: {str(e)}")
-    if isinstance(e, HTTPException):
-        return app.handle_http_exception(e)
-    
-    context = get_default_context()
-    context['error'] = f"An unexpected error occurred: {str(e)}"
-    return render_template('index.html', **context), 500
-
-if __name__ == '__main__':
-    print("=== SDXL Image Generator Server ===")
-    print("Server configured with 30-minute request timeout for long-running image generation")
-    print("Starting development server...")
-    
-    app.run(debug=True, port=5000, threaded=True, host='0.0.0.0', use_reloader=True)
+if __name__ == "__main__":
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "5000"))
+    print(f"=== Starting Modernized SDXL FastAPI Server on http://{host}:{port} ===")
+    uvicorn.run("local_server:app", host=host, port=port, reload=True)

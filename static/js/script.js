@@ -1,646 +1,759 @@
-// Modular JS components
-const UIComponents = {
-    promptHistory: {
-        init() {
-            this.renderHistory();
-            this.bindEvents();
-        },
-        
-        bindEvents() {
-            // Add event listeners for saving prompts to history
-            document.querySelectorAll('.generate-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const prompt = document.getElementById('prompt').value;
-                    const negativePrompt = document.getElementById('negative_prompt').value;
-                    if (prompt) {
-                        this.addToHistory(prompt, negativePrompt);
-                    }
-                });
-            });
-            
-            // Add event listener for the history panel toggle
-            document.getElementById('history-toggle')?.addEventListener('click', () => {
-                const panel = document.getElementById('history-panel');
-                if (panel) {
-                    panel.classList.toggle('history-panel-open');
-                }
-            });
-            
-            // Add event listener for the close button
-            document.getElementById('history-close-btn')?.addEventListener('click', () => {
-                const panel = document.getElementById('history-panel');
-                if (panel) {
-                    panel.classList.remove('history-panel-open');
-                }
-            });
-            
-            // Add event listener to close history panel when clicking anywhere else
-            document.addEventListener('click', (e) => {
-                const panel = document.getElementById('history-panel');
-                const toggle = document.getElementById('history-toggle');
-                
-                if (panel && panel.classList.contains('history-panel-open') &&
-                    !panel.contains(e.target) && 
-                    toggle && !toggle.contains(e.target)) {
-                    panel.classList.remove('history-panel-open');
-                }
-            });
-        },
-        
-        addToHistory(prompt, negativePrompt) {
-            let history = this.getHistory();
-            const timestamp = new Date().toISOString();
-            
-            // Add to the beginning of the array
-            history.unshift({
-                prompt,
-                negativePrompt,
-                timestamp,
-                favorite: false
-            });
-            
-            // Keep only the latest 20 items
-            if (history.length > 20) {
-                history = history.slice(0, 20);
-            }
-            
-            localStorage.setItem('prompt-history', JSON.stringify(history));
-            this.renderHistory();
-        },
-        
-        getHistory() {
-            const history = localStorage.getItem('prompt-history');
-            return history ? JSON.parse(history) : [];
-        },
-        
-        toggleFavorite(index) {
-            const history = this.getHistory();
-            if (history[index]) {
-                history[index].favorite = !history[index].favorite;
-                localStorage.setItem('prompt-history', JSON.stringify(history));
-                this.renderHistory();
-            }
-        },
-        
-        usePrompt(index) {
-            const history = this.getHistory();
-            if (history[index]) {
-                document.getElementById('prompt').value = history[index].prompt;
-                document.getElementById('negative_prompt').value = history[index].negativePrompt || '';
-                saveFormData(); // Save to form persistence
-            }
-        },
-        
-        renderHistory() {
-            const historyContainer = document.getElementById('prompt-history-container');
-            if (!historyContainer) return;
-            
-            // Clear container
-            historyContainer.innerHTML = '';
-            
-            const history = this.getHistory();
-            const favorites = history.filter(item => item.favorite);
-            
-            // Add favorites section if there are favorites
-            if (favorites.length > 0) {
-                const favoritesSection = document.createElement('div');
-                favoritesSection.classList.add('history-section');
-                
-                const favoritesHeader = document.createElement('h4');
-                favoritesHeader.textContent = 'Favorites';
-                favoritesSection.appendChild(favoritesHeader);
-                
-                favorites.forEach((item, originalIndex) => {
-                    const index = history.findIndex(h => h.timestamp === item.timestamp);
-                    favoritesSection.appendChild(this.createHistoryItem(item, index));
-                });
-                
-                historyContainer.appendChild(favoritesSection);
-            }
-            
-            // Add recent prompts section
-            const recentSection = document.createElement('div');
-            recentSection.classList.add('history-section');
-            
-            const recentHeader = document.createElement('h4');
-            recentHeader.textContent = 'Recent Prompts';
-            recentSection.appendChild(recentHeader);
-            
-            if (history.length === 0) {
-                const emptyMessage = document.createElement('p');
-                emptyMessage.textContent = 'No prompt history yet. Generate some images!';
-                recentSection.appendChild(emptyMessage);
-            } else {
-                history.forEach((item, index) => {
-                    recentSection.appendChild(this.createHistoryItem(item, index));
-                });
-            }
-            
-            historyContainer.appendChild(recentSection);
-        },
-        
-        createHistoryItem(item, index) {
-            const itemElement = document.createElement('div');
-            itemElement.classList.add('history-item');
-            
-            const promptText = document.createElement('p');
-            promptText.classList.add('history-prompt');
-            promptText.textContent = item.prompt.length > 60 ? 
-                item.prompt.substring(0, 60) + '...' : 
-                item.prompt;
-            itemElement.appendChild(promptText);
-            
-            const date = new Date(item.timestamp);
-            const dateText = document.createElement('small');
-            dateText.textContent = date.toLocaleString();
-            itemElement.appendChild(dateText);
-            
-            const buttonsContainer = document.createElement('div');
-            buttonsContainer.classList.add('history-buttons');
-            
-            const useButton = document.createElement('button');
-            useButton.classList.add('history-btn');
-            useButton.textContent = 'Use';
-            useButton.addEventListener('click', () => this.usePrompt(index));
-            buttonsContainer.appendChild(useButton);
-            
-            const favoriteButton = document.createElement('button');
-            favoriteButton.classList.add('history-btn', 'favorite-btn');
-            favoriteButton.innerHTML = item.favorite ? '★' : '☆';
-            favoriteButton.addEventListener('click', () => this.toggleFavorite(index));
-            buttonsContainer.appendChild(favoriteButton);
-            
-            itemElement.appendChild(buttonsContainer);
-            
-            return itemElement;
-        }
-    },
-    
+/**
+ * SDXL Studio - Lean Reactive Frontend Client
+ */
+
+// State Management
+const AppState = {
+    isGenerating: false,
+    timerInterval: null,
+    startTime: 0,
+    currentImages: [],
+    history: [],
+    presets: {},
+    activePresetKey: "",
+    loras: [
+        { model_id: "civitai:1681903", weight: 2.0 },
+        { model_id: "civitai:1764869", weight: 0.75 }
+    ]
 };
 
-// Function to open the image modal
-function enlargeImage(img) {
-    const modal = document.getElementById('imageModal');
-    const enlargedImg = document.getElementById('enlargedImage');
-    modal.style.display = 'block';
-    enlargedImg.src = img.src;
+// UI Elements Cache
+const UI = {};
+
+function initElements() {
+    UI.prompt = document.getElementById("prompt");
+    UI.negativePrompt = document.getElementById("negative_prompt");
+    UI.generateBtn = document.getElementById("generate-btn");
+    UI.generateBtnText = document.getElementById("generate-btn-text");
+    UI.progressContainer = document.getElementById("progress-container");
+    UI.progressStatus = document.getElementById("progress-status");
+    UI.progressTimer = document.getElementById("progress-timer");
+    UI.galleryGrid = document.getElementById("gallery-grid");
+    UI.resultSummary = document.getElementById("result-summary");
+    UI.presetSelector = document.getElementById("preset-selector");
+    UI.defaultNegBtn = document.getElementById("default-neg-btn");
+
+    UI.tabHf = document.getElementById("tab-hf");
+    UI.tabCivitai = document.getElementById("tab-civitai");
+    UI.groupHf = document.getElementById("group-hf");
+    UI.groupCivitai = document.getElementById("group-civitai");
+    UI.modelId = document.getElementById("model_id");
+    UI.civitaiId = document.getElementById("civitai_id");
+
+    UI.width = document.getElementById("width");
+    UI.height = document.getElementById("height");
+    UI.steps = document.getElementById("steps");
+    UI.stepsVal = document.getElementById("steps-val");
+    UI.guidanceScale = document.getElementById("guidance_scale");
+    UI.guidanceVal = document.getElementById("guidance-val");
+    UI.scheduler = document.getElementById("scheduler");
+    UI.seed = document.getElementById("seed");
+    UI.randomizeSeedBtn = document.getElementById("randomize-seed-btn");
+    UI.batchSize = document.getElementById("batch_size");
+    UI.batchCount = document.getElementById("batch_count");
+    UI.clipSkip = document.getElementById("clip_skip");
+
+    UI.freeuEnabled = document.getElementById("freeu_enabled");
+    UI.freeuParams = document.getElementById("freeu-params");
+    UI.freeuB1 = document.getElementById("freeu_b1");
+    UI.freeuB2 = document.getElementById("freeu_b2");
+    UI.freeuS1 = document.getElementById("freeu_s1");
+    UI.freeuS2 = document.getElementById("freeu_s2");
+
+    UI.loraContainer = document.getElementById("lora-container");
+    UI.addLoraBtn = document.getElementById("add-lora-btn");
+
+    UI.historyToggleBtn = document.getElementById("history-toggle-btn");
+    UI.historyDrawer = document.getElementById("history-drawer");
+    UI.historyOverlay = document.getElementById("history-overlay");
+    UI.closeHistoryBtn = document.getElementById("close-history-btn");
+    UI.historyList = document.getElementById("history-list");
+
+    UI.lightboxModal = document.getElementById("lightbox-modal");
+    UI.lightboxBackdrop = document.getElementById("lightbox-backdrop");
+    UI.lightboxClose = document.getElementById("lightbox-close");
+    UI.lightboxImg = document.getElementById("lightbox-img");
+    UI.lightboxMeta = document.getElementById("lightbox-meta");
+    UI.lightboxCopyBtn = document.getElementById("lightbox-copy-btn");
+    UI.lightboxReuseBtn = document.getElementById("lightbox-reuse-btn");
+    UI.lightboxDownloadLink = document.getElementById("lightbox-download-link");
+
+    UI.dropzone = document.getElementById("prompt-dropzone");
+    UI.toast = document.getElementById("toast");
 }
 
-// Function to close the image modal
-function closeModal() {
-    document.getElementById('imageModal').style.display = 'none';
-}
+// ==============================================================================
+// Toast Notifications
+// ==============================================================================
 
-// Close modal when clicking outside the image
-window.addEventListener('click', function(event) {
-    const modal = document.getElementById('imageModal');
-    if (event.target === modal) {
-        closeModal();
-    }
-});
-
-// Handle escape key to close modal
-window.addEventListener('keydown', function(event) {
-    if (event.key === 'Escape') {
-        closeModal();
-    }
-});
-
-// Copy to clipboard function - kept for potential future use but simplified
-function copyToClipboard(text) {
-    navigator.clipboard.writeText(text)
-        .then(() => showToast('Copied to clipboard!'))
-        .catch(err => console.error('Copy failed: ', err));
-}
-
-// Simple toast notification function
-function showToast(message) {
-    // Create toast element if it doesn't exist
-    let toast = document.getElementById('toast-notification');
-    if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'toast-notification';
-        document.body.appendChild(toast);
-    }
-    
-    // Set message and show toast
-    toast.textContent = message;
-    toast.classList.add('show-toast');
-    
-    // Hide toast after 3 seconds
+function showToast(message, duration = 3000) {
+    if (!UI.toast) return;
+    UI.toast.textContent = message;
+    UI.toast.classList.add("active");
     setTimeout(() => {
-        toast.classList.remove('show-toast');
-    }, 3000);
+        UI.toast.classList.remove("active");
+    }, duration);
 }
 
-// Form persistence using localStorage
-const formInputs = document.querySelectorAll('input, textarea, select');
-const formId = 'sdxl-generator-form';
-const clearFormBtn = document.getElementById('clear-form-btn');
+// ==============================================================================
+// Model Tabs & Dimension Presets
+// ==============================================================================
 
-// Connection status handler
-const ConnectionStatus = {
-    init() {
-        this.statusElement = null;
-        this.createStatusElement();
-    },
-    
-    createStatusElement() {
-        // Create status element if it doesn't exist
-        if (!this.statusElement) {
-            this.statusElement = document.createElement('div');
-            this.statusElement.className = 'connection-status';
-            this.statusElement.innerHTML = '<span class="connection-status-icon"></span><span class="connection-status-text"></span>';
-            document.body.appendChild(this.statusElement);
-        }
-    },
-    
-    show(message, type = 'info') {
-        this.createStatusElement();
-        
-        // Clear any existing classes
-        this.statusElement.classList.remove('connecting', 'error', 'success');
-        
-        // Set icon and class based on type
-        let icon = '';
-        if (type === 'connecting') {
-            icon = '⏳';
-            this.statusElement.classList.add('connecting');
-        } else if (type === 'error') {
-            icon = '❌';
-            this.statusElement.classList.add('error');
-        } else if (type === 'success') {
-            icon = '✓';
-            this.statusElement.classList.add('success');
-        }
-        
-        // Update content
-        this.statusElement.querySelector('.connection-status-icon').textContent = icon;
-        this.statusElement.querySelector('.connection-status-text').textContent = message;
-        
-        // Show the element
-        this.statusElement.classList.add('visible');
-        
-        // Auto-hide success and info messages after 3 seconds
-        if (type === 'success' || type === 'info') {
-            setTimeout(() => {
-                this.hide();
-            }, 3000);
-        }
-    },
-    
-    hide() {
-        if (this.statusElement) {
-            this.statusElement.classList.remove('visible');
-        }
-    }
-};
+function setupModelTabs() {
+    UI.tabHf.addEventListener("click", () => {
+        UI.tabHf.classList.add("active");
+        UI.tabCivitai.classList.remove("active");
+        UI.groupHf.style.display = "block";
+        UI.groupCivitai.style.display = "none";
+        saveFormState();
+    });
 
-// Enhanced error handling
-const ErrorHandler = {
-    init() {
-        // Add event listeners to close error panels
-        document.addEventListener('click', (e) => {
-            if (e.target.classList.contains('error-panel-close')) {
-                const panel = e.target.closest('.error-panel');
-                if (panel) {
-                    panel.remove();
-                }
-            }
+    UI.tabCivitai.addEventListener("click", () => {
+        UI.tabCivitai.classList.add("active");
+        UI.tabHf.classList.remove("active");
+        UI.groupCivitai.style.display = "block";
+        UI.groupHf.style.display = "none";
+        saveFormState();
+    });
+}
+
+function setupDimensionPresets() {
+    document.querySelectorAll(".dimensions-presets .pill-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll(".dimensions-presets .pill-btn").forEach((b) => b.classList.remove("active"));
+            btn.classList.add("active");
+            UI.width.value = btn.dataset.w;
+            UI.height.value = btn.dataset.h;
+            saveFormState();
         });
-    },
-    
-    showError(message, title = 'Error', tip = null) {
-        // Create error panel
-        const errorPanel = document.createElement('div');
-        errorPanel.className = 'error-panel';
-        
-        let html = `
-            <button class="error-panel-close" aria-label="Dismiss error">&times;</button>
-            <h4 class="error-panel-title">${title}</h4>
-            <div class="error-panel-message">${message}</div>
+    });
+}
+
+function setupSliders() {
+    UI.steps.addEventListener("input", () => {
+        UI.stepsVal.textContent = UI.steps.value;
+        saveFormState();
+    });
+    UI.guidanceScale.addEventListener("input", () => {
+        UI.guidanceVal.textContent = parseFloat(UI.guidanceScale.value).toFixed(1);
+        saveFormState();
+    });
+
+    UI.freeuEnabled.addEventListener("change", () => {
+        UI.freeuParams.style.display = UI.freeuEnabled.checked ? "block" : "none";
+        saveFormState();
+    });
+
+    UI.randomizeSeedBtn.addEventListener("click", () => {
+        UI.seed.value = "";
+        showToast("Seed set to random");
+        saveFormState();
+    });
+
+    UI.defaultNegBtn.addEventListener("click", () => {
+        UI.negativePrompt.value = "cartoon, animation, drawing, low quality, blurry, deformed, bad anatomy, disfigured, watermark, signature";
+        saveFormState();
+        showToast("Inserted default negative prompt");
+    });
+}
+
+// ==============================================================================
+// LoRA Manager
+// ==============================================================================
+
+function renderLoras() {
+    if (!UI.loraContainer) return;
+    UI.loraContainer.innerHTML = "";
+
+    AppState.loras.forEach((lora, idx) => {
+        const row = document.createElement("div");
+        row.className = "lora-row";
+
+        const isCivitai = lora.model_id.startsWith("civitai:");
+        const cleanId = lora.model_id.replace("civitai:", "").replace("hf:", "");
+
+        row.innerHTML = `
+            <div class="lora-header">
+                <span>LoRA #${idx + 1}</span>
+                <button type="button" class="remove-lora-btn" data-idx="${idx}" title="Remove LoRA">&times;</button>
+            </div>
+            <div class="tab-group" style="margin-bottom: 4px;">
+                <button type="button" class="tab-btn ${isCivitai ? 'active' : ''}" data-source="civitai" data-idx="${idx}">CivitAI</button>
+                <button type="button" class="tab-btn ${!isCivitai ? 'active' : ''}" data-source="hf" data-idx="${idx}">HF</button>
+            </div>
+            <div class="row-inputs">
+                <div class="col" style="flex: 2;">
+                    <input type="text" class="text-input lora-id-input" data-idx="${idx}" value="${cleanId}" placeholder="${isCivitai ? 'Model ID (e.g. 1681903)' : 'repo/path'}">
+                </div>
+                <div class="col" style="flex: 1;">
+                    <input type="number" class="text-input lora-weight-input" data-idx="${idx}" value="${lora.weight}" step="0.05" min="-2" max="3" placeholder="Weight">
+                </div>
+            </div>
         `;
-        
-        if (tip) {
-            html += `<div class="error-panel-tip">${tip}</div>`;
-        }
-        
-        errorPanel.innerHTML = html;
-        
-        // Add retry button for connection errors
-        if (title.includes('Connection') || message.includes('connection') || message.includes('reset')) {
-            const retryButton = document.createElement('button');
-            retryButton.className = 'retry-button';
-            retryButton.textContent = 'Try Again with Reduced Settings';
-            retryButton.addEventListener('click', () => {
-                // Reduce batch settings
-                const batchSizeInput = document.getElementById('batch_size');
-                const batchCountInput = document.getElementById('batch_count');
-                
-                if (batchSizeInput && parseInt(batchSizeInput.value) > 1) {
-                    batchSizeInput.value = 1;
-                }
-                
-                if (batchCountInput && parseInt(batchCountInput.value) > 1) {
-                    batchCountInput.value = 1;
-                }
-                
-                // Update total images count
-                updateTotalImages();
-                
-                // Remove the error panel
-                errorPanel.remove();
-                
-                // Submit the form
-                document.getElementById('generate-form').submit();
-            });
-            
-            errorPanel.appendChild(retryButton);
-        }
-        
-        // Insert at the top of the page
-        const container = document.querySelector('.container');
-        if (container && container.firstChild) {
-            container.insertBefore(errorPanel, container.querySelector('h1').nextSibling);
-        } else {
-            document.body.prepend(errorPanel);
-        }
-    },
-    
-    handleNetworkError(error) {
-        console.error('Network error:', error);
-        
-        let title = 'Connection Error';
-        let message = 'Could not connect to the server.';
-        let tip = 'The server might be temporarily unavailable. Try reducing batch size or using simpler settings.';
-        
-        if (error.message.includes('reset')) {
-            message = 'The connection was reset by the server.';
-            tip = 'This typically happens when generating large batches or complex images. Try reducing batch size, using fewer steps, or simplifying your prompt.';
-        } else if (error.message.includes('timeout')) {
-            message = 'The request timed out.';
-            tip = 'The server is taking too long to respond. Try reducing batch size or steps.';
-        }
-        
-        this.showError(message, title, tip);
-    }
-};
+        UI.loraContainer.appendChild(row);
+    });
 
-// Add network and error monitoring to detect connection resets
-const NetworkMonitor = {
-    init() {
-        // Watch for online/offline events
-        window.addEventListener('online', () => {
-            ConnectionStatus.show('Back online', 'success');
+    // Bind events
+    UI.loraContainer.querySelectorAll(".remove-lora-btn").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+            const idx = parseInt(e.target.dataset.idx, 10);
+            AppState.loras.splice(idx, 1);
+            renderLoras();
+            saveFormState();
         });
-        
-        window.addEventListener('offline', () => {
-            ConnectionStatus.show('Connection lost', 'error');
+    });
+
+    UI.loraContainer.querySelectorAll(".tab-btn").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+            const idx = parseInt(e.target.dataset.idx, 10);
+            const source = e.target.dataset.source;
+            const currentVal = AppState.loras[idx].model_id.replace("civitai:", "").replace("hf:", "");
+            AppState.loras[idx].model_id = `${source}:${currentVal}`;
+            renderLoras();
+            saveFormState();
         });
-        
-        // Detect aborted connections that might lead to ERR_CONNECTION_RESET
-        window.addEventListener('unhandledrejection', (event) => {
-            if (event.reason && 
-                typeof event.reason.message === 'string' &&
-                (event.reason.message.includes('abort') || 
-                event.reason.message.includes('reset') || 
-                event.reason.message.includes('network'))) {
-                
-                ErrorHandler.handleNetworkError(event.reason);
-                event.preventDefault(); // Prevent default error handling
-            }
+    });
+
+    UI.loraContainer.querySelectorAll(".lora-id-input").forEach((inp) => {
+        inp.addEventListener("change", (e) => {
+            const idx = parseInt(e.target.dataset.idx, 10);
+            const isCivitai = AppState.loras[idx].model_id.startsWith("civitai:");
+            const prefix = isCivitai ? "civitai:" : "hf:";
+            AppState.loras[idx].model_id = `${prefix}${e.target.value.trim()}`;
+            saveFormState();
         });
-    }
-};
+    });
 
-// Initialize additional components when DOM is ready
-document.addEventListener('DOMContentLoaded', function() {
-    loadFormData();
-    updateTotalImages(); // Initialize total images counter
-    
-    // Hide clear button if no saved data
-    if (!localStorage.getItem(formId)) {
-        clearFormBtn.style.display = 'none';
-    }
-    
-    // Initialize UI components
-    UIComponents.promptHistory.init();
-    
-    // Initialize new components
-    ConnectionStatus.init();
-    ErrorHandler.init();
-    NetworkMonitor.init();
-    
-    // Ensure loading div is hidden on initial page load
-    const loadingDiv = document.getElementById('loading');
-    if (loadingDiv) {
-        loadingDiv.style.display = 'none';
-    }
-    
-    // If there's a result image, scroll to it
-    const resultDiv = document.getElementById('result');
-    if (resultDiv) {
-        resultDiv.scrollIntoView({behavior: 'smooth'});
-    }
-});
+    UI.loraContainer.querySelectorAll(".lora-weight-input").forEach((inp) => {
+        inp.addEventListener("change", (e) => {
+            const idx = parseInt(e.target.dataset.idx, 10);
+            AppState.loras[idx].weight = parseFloat(e.target.value) || 0.75;
+            saveFormState();
+        });
+    });
+}
 
-// Save form data as user types/changes values
-formInputs.forEach(input => {
-    input.addEventListener('change', saveFormData);
-    if (input.tagName === 'TEXTAREA' || input.type === 'text' || input.type === 'number') {
-        input.addEventListener('input', saveFormData);
+function setupLoraControls() {
+    UI.addLoraBtn.addEventListener("click", () => {
+        if (AppState.loras.length >= 5) {
+            showToast("Maximum 5 LoRAs allowed");
+            return;
+        }
+        AppState.loras.push({ model_id: "civitai:", weight: 0.75 });
+        renderLoras();
+        saveFormState();
+    });
+}
+
+// ==============================================================================
+// Presets Manager
+// ==============================================================================
+
+async function loadPresets() {
+    try {
+        const res = await fetch("/api/presets");
+        if (res.ok) {
+            AppState.presets = await res.json();
+        }
+    } catch (e) {
+        console.warn("Could not load presets:", e);
     }
-});
+}
 
-// Clear saved form data
-clearFormBtn.addEventListener('click', function() {
-    localStorage.removeItem(formId);
-    clearFormBtn.style.display = 'none';
-    alert('Saved form data cleared!');
-});
+function setupPresets() {
+    UI.presetSelector.addEventListener("change", (e) => {
+        const key = e.target.value;
+        if (!key || !AppState.presets[key]) return;
 
-function saveFormData() {
-    const formData = {};
-    formInputs.forEach(input => {
-        const name = input.name;
-        if (!name) return;
-        
-        if (input.type === 'checkbox') {
-            formData[name] = input.checked;
-        } else if (input.type === 'radio') {
-            if (input.checked) {
-                formData[name] = input.value;
-            }
+        const preset = AppState.presets[key];
+        if (preset.prompt_suffix && !UI.prompt.value.includes(preset.prompt_suffix.trim())) {
+            UI.prompt.value = (UI.prompt.value.trim() + preset.prompt_suffix).replace(/^,\s*/, "");
+        }
+        if (preset.negative_prompt) {
+            UI.negativePrompt.value = preset.negative_prompt;
+        }
+        if (preset.steps) {
+            UI.steps.value = preset.steps;
+            UI.stepsVal.textContent = preset.steps;
+        }
+        if (preset.guidance_scale) {
+            UI.guidanceScale.value = preset.guidance_scale;
+            UI.guidanceVal.textContent = preset.guidance_scale.toFixed(1);
+        }
+        if (preset.scheduler) {
+            UI.scheduler.value = preset.scheduler;
+        }
+        saveFormState();
+        showToast(`Applied '${preset.name}' style preset`);
+    });
+}
+
+// ==============================================================================
+// Drag & Drop PNG Parameter Loader
+// ==============================================================================
+
+function setupDropzone() {
+    const dropzone = UI.dropzone;
+
+    ["dragenter", "dragover"].forEach((eventName) => {
+        window.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            dropzone.classList.add("drag-active");
+        });
+    });
+
+    ["dragleave", "dragend"].forEach((eventName) => {
+        dropzone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            dropzone.classList.remove("drag-active");
+        });
+    });
+
+    window.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        dropzone.classList.remove("drag-active");
+
+        if (!e.dataTransfer || !e.dataTransfer.files || e.dataTransfer.files.length === 0) return;
+        const file = e.dataTransfer.files[0];
+        if (!file.name.endsWith(".png")) {
+            showToast("Please drop a PNG image to read metadata.");
+            return;
+        }
+
+        showToast("Reading image metadata...");
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const res = await fetch("/api/metadata", { method: "POST", body: formData });
+            if (!res.ok) throw new Error("Could not extract metadata");
+            const meta = await res.json();
+            applyExtractedMetadata(meta);
+            showToast("Restored generation parameters from PNG!");
+        } catch (err) {
+            console.error(err);
+            showToast("Failed to parse PNG metadata.");
+        }
+    });
+}
+
+function applyExtractedMetadata(meta) {
+    if (meta.prompt) UI.prompt.value = meta.prompt;
+    if (meta.negative_prompt) UI.negativePrompt.value = meta.negative_prompt;
+    if (meta.steps) {
+        UI.steps.value = meta.steps;
+        UI.stepsVal.textContent = meta.steps;
+    }
+    if (meta.guidance_scale) {
+        UI.guidanceScale.value = meta.guidance_scale;
+        UI.guidanceVal.textContent = parseFloat(meta.guidance_scale).toFixed(1);
+    }
+    if (meta.seed !== undefined) UI.seed.value = meta.seed;
+    if (meta.width) UI.width.value = meta.width;
+    if (meta.height) UI.height.value = meta.height;
+    if (meta.scheduler) UI.scheduler.value = meta.scheduler;
+    if (meta.clip_skip) UI.clipSkip.value = meta.clip_skip;
+
+    if (meta.model_id) {
+        if (meta.model_id.startsWith("civitai:")) {
+            UI.tabCivitai.click();
+            UI.civitaiId.value = meta.model_id.replace("civitai:", "");
         } else {
-            formData[name] = input.value;
+            UI.tabHf.click();
+            UI.modelId.value = meta.model_id;
         }
-    });
-    
-    localStorage.setItem(formId, JSON.stringify(formData));
-    clearFormBtn.style.display = 'block';
+    }
+
+    if (meta.loras && Array.isArray(meta.loras)) {
+        AppState.loras = meta.loras.map((l) => ({
+            model_id: l.model_id,
+            weight: l.weight || 0.75
+        }));
+        renderLoras();
+    }
+
+    saveFormState();
 }
 
-function loadFormData() {
-    const savedData = localStorage.getItem(formId);
-    if (!savedData) return;
-    
-    const formData = JSON.parse(savedData);
-    formInputs.forEach(input => {
-        const name = input.name;
-        if (!name || !(name in formData)) return;
-        
-        if (input.type === 'checkbox') {
-            input.checked = formData[name];
-        } else if (input.type === 'radio') {
-            input.checked = (input.value === formData[name]);
-        } else {
-            input.value = formData[name];
-        }
-    });
-    
-    // Make sure to update UI after loading saved data
-    toggleModelSource(document.querySelector('input[name="model_source"]:checked').value);
-}
+// ==============================================================================
+// Generation Workflow
+// ==============================================================================
 
-// Total images counter functionality
-const batchSizeInput = document.getElementById('batch_size');
-const batchCountInput = document.getElementById('batch_count');
-const totalImagesDisplay = document.getElementById('total-images-info');
+function getGenerationPayload() {
+    const isCivitai = UI.tabCivitai.classList.contains("active");
+    let modelId = DEFAULT_MODEL_ID;
 
-function updateTotalImages() {
-    const size = parseInt(batchSizeInput.value) || 1;
-    const count = parseInt(batchCountInput.value) || 1;
-    // Each batch generates exactly 'size' images, and we run 'count' batches
-    // The total is simply size * count (not size^2 * count)
-    totalImagesDisplay.textContent = `Total images to generate: ${size * count}`;
-}
-
-batchSizeInput.addEventListener('input', updateTotalImages);
-batchCountInput.addEventListener('input', updateTotalImages);
-
-// Global variable to track if a form is currently being submitted
-let isFormSubmitting = false;
-
-// Form submission handling
-document.getElementById('generate-form').addEventListener('submit', function(event) {
-    // Prevent double submission
-    if (isFormSubmitting) {
-        event.preventDefault();
-        return false;
-    }
-    
-    isFormSubmitting = true;
-    
-    // Show loading indicator before traditional form submit
-    const loadingDiv = document.getElementById('loading');
-    if (loadingDiv) {
-        loadingDiv.style.display = 'block';
-    }
-    
-    // Change button text to "Generating..."
-    const generateBtns = document.querySelectorAll('.generate-btn');
-    generateBtns.forEach(btn => {
-        btn.textContent = "Generating...";
-        btn.disabled = true;
-    });
-    
-    // Save form data to localStorage before submission
-    saveFormData();
-    
-    // Get batch parameters to show appropriate message
-    const batchSize = parseInt(document.getElementById('batch_size').value) || 1;
-    const batchCount = parseInt(document.getElementById('batch_count').value) || 1;
-    const isBatch = batchSize > 1 || batchCount > 1;
-    const timeoutMinutes = isBatch ? 20 : 10;
-    
-    // Show timeout information
-    // Do not edit wording here
-    ConnectionStatus.show(`Processing request... (up to ${timeoutMinutes} minutes for large batches)`, 'connecting');
-    
-    // Make sure to clean up any existing progress timer
-    if (window.progressTimer) {
-        clearInterval(window.progressTimer);
-        window.progressTimer = null;
-    }
-    
-    // Initialize timer for UI feedback
-    let seconds = 0;
-    window.progressTimer = setInterval(() => {
-        seconds++;
-        const timeEstimateEl = document.getElementById('time-estimate');
-        if (timeEstimateEl) {
-            timeEstimateEl.textContent = `Processing for ${seconds} seconds... Please wait`;
-            
-            if (seconds >= 300) { // 5 minutes
-                timeEstimateEl.innerHTML = "Still processing... This might take a few more minutes.<br>Large batches and complex prompts take longer.";
-            }
-        }
-    }, 1000);
-    
-    // Allow form to submit naturally - no preventDefault()
-    return true;
-});
-
-// Always need to clean up timers when page loads/unloads
-window.addEventListener('beforeunload', function() {
-    if (window.progressTimer) {
-        clearInterval(window.progressTimer);
-        window.progressTimer = null;
-    }
-});
-
-// Improved window.onload handling
-window.onload = function() {
-    console.log("Page loaded - cleaning up UI state");
-    
-    // Always hide loading indicator
-    const loadingDiv = document.getElementById('loading');
-    if (loadingDiv) {
-        loadingDiv.style.display = 'none';
-    }
-
-    // Reset submit state
-    isFormSubmitting = false;
-
-    // Always reset generate buttons
-    const generateBtns = document.querySelectorAll('.generate-btn');
-    generateBtns.forEach(btn => {
-        if (btn) { // Check if button exists
-            btn.textContent = "Generate Image";
-            btn.disabled = false;
-        }
-    });
-
-    // Always clear any progress timer
-    if (window.progressTimer) {
-        clearInterval(window.progressTimer);
-        window.progressTimer = null; // Clear the variable itself
-    }
-
-    // If there's a result image, scroll to it
-    const resultDiv = document.getElementById('result');
-    if (resultDiv) {
-        resultDiv.scrollIntoView({behavior: 'smooth'});
-        // Success notification is handled by Flask flash messages
-    }
-}
-
-// Toggle model source display
-function toggleModelSource(source) {
-    if (source === 'huggingface') {
-        document.getElementById('huggingface-options').style.display = 'block';
-        document.getElementById('civitai-options').style.display = 'none';
-        document.getElementById('civitai_id').removeAttribute('required');
+    if (isCivitai) {
+        const cid = UI.civitaiId.value.trim();
+        if (!cid) throw new Error("Please enter a CivitAI SDXL Model ID");
+        modelId = `civitai:${cid}`;
     } else {
-        document.getElementById('huggingface-options').style.display = 'none';
-        document.getElementById('civitai-options').style.display = 'block';
-        document.getElementById('civitai_id').setAttribute('required', 'required');
+        modelId = UI.modelId.value.trim() || DEFAULT_MODEL_ID;
+    }
+
+    const validLoras = AppState.loras.filter((l) => {
+        const clean = l.model_id.replace("civitai:", "").replace("hf:", "").trim();
+        return clean.length > 0;
+    });
+
+    const payload = {
+        prompt: UI.prompt.value.trim(),
+        negative_prompt: UI.negativePrompt.value.trim(),
+        model_id: modelId,
+        width: parseInt(UI.width.value, 10) || 1024,
+        height: parseInt(UI.height.value, 10) || 1024,
+        steps: parseInt(UI.steps.value, 10) || 30,
+        guidance_scale: parseFloat(UI.guidanceScale.value) || 7.5,
+        batch_size: parseInt(UI.batchSize.value, 10) || 1,
+        batch_count: parseInt(UI.batchCount.value, 10) || 1,
+        scheduler: UI.scheduler.value,
+        loras: validLoras.length > 0 ? validLoras : null
+    };
+
+    if (UI.seed.value.trim()) {
+        payload.seed = parseInt(UI.seed.value.trim(), 10);
+    }
+    if (UI.clipSkip.value.trim()) {
+        payload.clip_skip = parseInt(UI.clipSkip.value.trim(), 10);
+    }
+
+    if (UI.freeuEnabled.checked) {
+        payload.freeu = {
+            enabled: true,
+            b1: parseFloat(UI.freeuB1.value) || 1.3,
+            b2: parseFloat(UI.freeuB2.value) || 1.4,
+            s1: parseFloat(UI.freeuS1.value) || 0.9,
+            s2: parseFloat(UI.freeuS2.value) || 0.2
+        };
+    }
+
+    return payload;
+}
+
+async function triggerGeneration() {
+    if (AppState.isGenerating) return;
+
+    if (!UI.prompt.value.trim()) {
+        showToast("Please enter a positive prompt.");
+        UI.prompt.focus();
+        return;
+    }
+
+    let payload;
+    try {
+        payload = getGenerationPayload();
+    } catch (err) {
+        showToast(err.message);
+        return;
+    }
+
+    startProgress();
+
+    try {
+        const response = await fetch("/api/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({ detail: response.statusText }));
+            throw new Error(errData.detail || "Generation failed.");
+        }
+
+        const data = await response.json();
+        handleGenerationSuccess(data);
+    } catch (err) {
+        console.error("Generation error:", err);
+        showToast(`Error: ${err.message}`, 5000);
+    } finally {
+        stopProgress();
     }
 }
 
-// Set dimensions from presets
-function setDimensions(width, height) {
-    document.getElementById('width').value = width;
-    document.getElementById('height').value = height;
-    saveFormData(); // Save form data after setting dimensions
-} 
+function startProgress() {
+    AppState.isGenerating = true;
+    AppState.startTime = Date.now();
+    UI.generateBtn.disabled = true;
+    UI.generateBtnText.textContent = "Generating...";
+    UI.progressContainer.style.display = "flex";
+    UI.progressStatus.textContent = "Dispatched to Modal GPU...";
+
+    AppState.timerInterval = setInterval(() => {
+        const elapsed = ((Date.now() - AppState.startTime) / 1000).toFixed(1);
+        UI.progressTimer.textContent = `${elapsed}s`;
+        if (elapsed > 10) {
+            UI.progressStatus.textContent = "Denoising latents...";
+        }
+    }, 100);
+}
+
+function stopProgress() {
+    AppState.isGenerating = false;
+    UI.generateBtn.disabled = false;
+    UI.generateBtnText.textContent = "Generate Image";
+    UI.progressContainer.style.display = "none";
+    if (AppState.timerInterval) {
+        clearInterval(AppState.timerInterval);
+        AppState.timerInterval = null;
+    }
+}
+
+function handleGenerationSuccess(data) {
+    showToast(`Generated ${data.images.length} image(s) in ${data.duration_seconds}s!`);
+    UI.resultSummary.textContent = `${data.images.length} image(s) • ${data.duration_seconds}s`;
+
+    UI.galleryGrid.innerHTML = "";
+    data.images.forEach((filename, idx) => {
+        const item = document.createElement("div");
+        item.className = "gallery-item";
+        item.innerHTML = `
+            <img src="/images/${filename}" alt="Generated image #${idx + 1}" loading="lazy">
+            <div class="gallery-overlay">
+                <span class="gallery-overlay-text">${filename}</span>
+            </div>
+        `;
+        item.addEventListener("click", () => {
+            openLightbox(`/images/${filename}`, data.parameters, filename);
+        });
+        UI.galleryGrid.appendChild(item);
+    });
+
+    loadHistory();
+}
+
+// ==============================================================================
+// Lightbox Modal
+// ==============================================================================
+
+let currentLightboxData = null;
+
+function openLightbox(imageUrl, parameters, filename) {
+    currentLightboxData = { imageUrl, parameters, filename };
+    UI.lightboxImg.src = imageUrl;
+
+    const params = parameters || {};
+    UI.lightboxMeta.innerHTML = `
+        <div class="meta-field">
+            <strong>Prompt</strong>
+            <div class="meta-box">${params.prompt || "N/A"}</div>
+        </div>
+        ${params.negative_prompt ? `
+        <div class="meta-field">
+            <strong>Negative Prompt</strong>
+            <div class="meta-box">${params.negative_prompt}</div>
+        </div>` : ""}
+        <div class="meta-field">
+            <strong>Settings</strong>
+            <div>${params.width || 1024}×${params.height || 1024} • ${params.steps || 30} steps • CFG ${params.guidance_scale || 7.5} • Seed ${params.seed || "Random"}</div>
+            <div>Sampler: ${params.scheduler || "euler_ancestral"}</div>
+            <div>Model: ${params.model_id || "SDXL"}</div>
+        </div>
+    `;
+
+    UI.lightboxDownloadLink.href = imageUrl;
+    UI.lightboxDownloadLink.download = filename || "sdxl_image.png";
+
+    UI.lightboxModal.classList.add("active");
+}
+
+function closeLightbox() {
+    UI.lightboxModal.classList.remove("active");
+}
+
+function setupLightbox() {
+    UI.lightboxClose.addEventListener("click", closeLightbox);
+    UI.lightboxBackdrop.addEventListener("click", closeLightbox);
+
+    UI.lightboxCopyBtn.addEventListener("click", () => {
+        if (currentLightboxData && currentLightboxData.parameters && currentLightboxData.parameters.prompt) {
+            navigator.clipboard.writeText(currentLightboxData.parameters.prompt);
+            showToast("Copied prompt to clipboard!");
+        }
+    });
+
+    UI.lightboxReuseBtn.addEventListener("click", () => {
+        if (currentLightboxData && currentLightboxData.parameters) {
+            applyExtractedMetadata(currentLightboxData.parameters);
+            closeLightbox();
+            showToast("Parameters loaded into form!");
+        }
+    });
+
+    window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && UI.lightboxModal.classList.contains("active")) {
+            closeLightbox();
+        }
+    });
+}
+
+// ==============================================================================
+// History Drawer
+// ==============================================================================
+
+async function loadHistory() {
+    try {
+        const res = await fetch("/api/history");
+        if (!res.ok) return;
+        AppState.history = await res.json();
+        renderHistory();
+    } catch (e) {
+        console.warn("Could not fetch history:", e);
+    }
+}
+
+function renderHistory() {
+    if (!UI.historyList) return;
+    if (AppState.history.length === 0) {
+        UI.historyList.innerHTML = '<div class="empty-text">No generation history yet.</div>';
+        return;
+    }
+
+    UI.historyList.innerHTML = "";
+    AppState.history.forEach((entry) => {
+        const firstImg = entry.filenames && entry.filenames[0] ? entry.filenames[0] : "";
+        const item = document.createElement("div");
+        item.className = "history-item";
+        item.innerHTML = `
+            <img src="/images/${firstImg}" class="history-thumb" alt="thumb" loading="lazy">
+            <div class="history-info">
+                <div class="history-prompt" title="${entry.prompt}">${entry.prompt}</div>
+                <div class="history-time">${entry.display_time || ""} • ${entry.filenames.length} img</div>
+            </div>
+        `;
+        item.addEventListener("click", () => {
+            if (firstImg) {
+                openLightbox(`/images/${firstImg}`, entry.parameters, firstImg);
+            }
+        });
+        UI.historyList.appendChild(item);
+    });
+}
+
+function setupHistoryDrawer() {
+    UI.historyToggleBtn.addEventListener("click", () => {
+        UI.historyDrawer.classList.add("active");
+        UI.historyOverlay.classList.add("active");
+        loadHistory();
+    });
+
+    const closeDrawer = () => {
+        UI.historyDrawer.classList.remove("active");
+        UI.historyOverlay.classList.remove("active");
+    };
+
+    UI.closeHistoryBtn.addEventListener("click", closeDrawer);
+    UI.historyOverlay.addEventListener("click", closeDrawer);
+}
+
+// ==============================================================================
+// State Persistence (localStorage)
+// ==============================================================================
+
+const STORAGE_KEY = "sdxl_studio_state_v2";
+
+function saveFormState() {
+    const isCivitai = UI.tabCivitai.classList.contains("active");
+    const state = {
+        prompt: UI.prompt.value,
+        negative_prompt: UI.negativePrompt.value,
+        is_civitai: isCivitai,
+        model_id: UI.modelId.value,
+        civitai_id: UI.civitaiId.value,
+        width: UI.width.value,
+        height: UI.height.value,
+        steps: UI.steps.value,
+        guidance_scale: UI.guidanceScale.value,
+        scheduler: UI.scheduler.value,
+        seed: UI.seed.value,
+        batch_size: UI.batchSize.value,
+        batch_count: UI.batchCount.value,
+        clip_skip: UI.clipSkip.value,
+        freeu_enabled: UI.freeuEnabled.checked,
+        loras: AppState.loras
+    };
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (e) {}
+}
+
+function loadFormState() {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) {
+            renderLoras();
+            return;
+        }
+        const state = JSON.parse(raw);
+        if (state.prompt !== undefined) UI.prompt.value = state.prompt;
+        if (state.negative_prompt !== undefined) UI.negativePrompt.value = state.negative_prompt;
+        if (state.is_civitai) {
+            UI.tabCivitai.click();
+        } else {
+            UI.tabHf.click();
+        }
+        if (state.model_id) UI.modelId.value = state.model_id;
+        if (state.civitai_id) UI.civitaiId.value = state.civitai_id;
+        if (state.width) UI.width.value = state.width;
+        if (state.height) UI.height.value = state.height;
+        if (state.steps) {
+            UI.steps.value = state.steps;
+            UI.stepsVal.textContent = state.steps;
+        }
+        if (state.guidance_scale) {
+            UI.guidanceScale.value = state.guidance_scale;
+            UI.guidanceVal.textContent = parseFloat(state.guidance_scale).toFixed(1);
+        }
+        if (state.scheduler) UI.scheduler.value = state.scheduler;
+        if (state.seed) UI.seed.value = state.seed;
+        if (state.batch_size) UI.batchSize.value = state.batch_size;
+        if (state.batch_count) UI.batchCount.value = state.batch_count;
+        if (state.clip_skip) UI.clipSkip.value = state.clip_skip;
+        if (state.freeu_enabled) {
+            UI.freeuEnabled.checked = true;
+            UI.freeuParams.style.display = "block";
+        }
+        if (state.loras && Array.isArray(state.loras)) {
+            AppState.loras = state.loras;
+        }
+        renderLoras();
+    } catch (e) {
+        renderLoras();
+    }
+}
+
+// ==============================================================================
+// Keyboard Shortcuts & Initialization
+// ==============================================================================
+
+function setupKeyboardShortcuts() {
+    window.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+            e.preventDefault();
+            triggerGeneration();
+        }
+    });
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+    initElements();
+    setupModelTabs();
+    setupDimensionPresets();
+    setupSliders();
+    setupLoraControls();
+    setupPresets();
+    setupDropzone();
+    setupLightbox();
+    setupHistoryDrawer();
+    setupKeyboardShortcuts();
+
+    UI.generateBtn.addEventListener("click", triggerGeneration);
+
+    [UI.prompt, UI.negativePrompt, UI.modelId, UI.civitaiId, UI.width, UI.height, UI.seed, UI.batchSize, UI.batchCount, UI.clipSkip].forEach((input) => {
+        input.addEventListener("input", saveFormState);
+    });
+
+    await loadPresets();
+    loadFormState();
+    loadHistory();
+});

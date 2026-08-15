@@ -1,194 +1,184 @@
-# SDXL Image Generator
+# SDXL Studio (Modal + FastAPI)
 
-A powerful and flexible text-to-image generation system built with [Modal](https://modal.com/) and [Stable Diffusion XL](https://stability.ai/stable-diffusion). This project provides both a web interface and API for generating high-quality images from text prompts.
+A modernized, high-performance text-to-image generation platform powered by **[Modal](https://modal.com/)**, **Stable Diffusion XL**, and an asynchronous **FastAPI** web interface.
 
-## Features
+---
 
-- **High-Quality Image Generation**: Uses Stable Diffusion XL models for state-of-the-art image generation
-- **Model Flexibility**: Support for both Hugging Face and CivitAI SDXL models
-- **LoRA Support**: Add up to 5 LoRAs from CivitAI or Hugging Face to customize your generations
-- **Advanced Options**: Control dimensions, sampling steps, guidance scale, and more
-- **Batch Generation**: Generate multiple images in parallel
-- **Web Interface**: User-friendly web UI for easy image generation
-- **Long Prompt Handling**: Supports very long prompts through token-based chunking
-- **CLIP Skip**: Fine-tune the way the model interprets your prompts
-- **Multiple Schedulers**: Choose between sampling methods for different quality/speed tradeoffs
-- **Configurable GPU**: Select which GPU type to use with Modal
+## ⚡ Highlights
 
-## Setup Instructions
+- **Modern Serverless Engine**: Powered by Modal serverless GPUs (L4, A10G, A100, H100) with automatic scale-down and persistent model caching.
+- **Identical A1111-Style Prompt Chunking**: Preserves the Automatic1111 dual-CLIP text encoder token chunking and hidden-state concatenation algorithm (`_encode_prompt_chunked`) for long prompts (>77 tokens).
+- **PyTorch 2.x SDPA Attention**: Native Scaled Dot-Product Attention for fast, memory-efficient generation without legacy xformers build overhead.
+- **Clean Diffusers LoRA Management**: Multi-LoRA stacking (up to 5 LoRAs) from CivitAI or Hugging Face with native PEFT lifecycle management (`load_lora_weights`, `set_adapters`, `unload_lora_weights`).
+- **Embedded PNG Metadata**: Outputs standard A1111 / ComfyUI compatible `tEXt` chunks (Prompt, Negative Prompt, Seed, Sampler, Steps, CFG, Model, LoRAs).
+- **Drag-and-Drop Parameter Restoration**: Drag any generated PNG directly into the web UI to instantly restore all generation settings.
+- **Extended Samplers & FreeU**: Includes 6 schedulers (Euler Ancestral, DPM++ 2M Karras, DPM++ SDE Karras, UniPC, Euler, DDIM) and optional FreeU frequency enhancement.
+- **Lean Reactive Frontend**: Fast single-page application (ES6+, modern CSS) with live generation timers, style presets, history drawer, and full-resolution lightbox modal.
+- **Asynchronous Local Server**: Built on FastAPI and Uvicorn with `httpx` async client for non-blocking execution.
 
-### Prerequisites
+---
 
-- Python 3.12+ recommended
-- A Modal account (https://modal.com)
-- Flask for the web interface
-- A CivitAI account and API token (for using CivitAI models)
+## 📦 Architecture
 
-### Installation
-
-1. Clone this repository:
-   ```
-   git clone https://github.com/kirin-3/modal-sdxl
-   cd modal-sdxl
-   ```
-
-2. Install the required packages:
-   ```
-   pip install -r requirements.txt
-   ```
-
-3. Set up Modal CLI:
-   ```
-   pip install modal
-   modal token new
-   ```
-
-4. Set up a CivitAI token secret in Modal:
-   ```
-   modal secret create civitai-token --value "YOUR_CIVITAI_API_TOKEN"
-   ```
-   You can get your CivitAI API token from your account page: https://civitai.com/user/account
-
-5. Create a configuration file:
-   ```
-   cp example.env .env
-   ```
-   
-   Edit the `.env` file to set your Modal endpoint URL and GPU configuration:
-   ```
-   # Modal endpoints
-   MODAL_ENDPOINT=https://yourusername--text2image-inference-web.modal.run
-   
-   # GPU configuration 
-   GPU_TYPE=L4
-   ```
-
-6. Deploy the SDXL application to Modal:
-   ```
-   modal deploy text2image.py
-   ```
-
-7. Get your Modal endpoint URL:
-   ```
-   modal endpoints list
-   ```
-   
-   Update your `.env` file with the actual endpoint URL.
-
-### Running the Web Interface
-
-Start the local web server:
 ```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Browser UI (Lean Reactive SPA)                                          │
+│   • Live timer • Style Presets • Lightbox • Drag-and-drop PNG loader    │
+└────────────────────────────────────┬────────────────────────────────────┘
+                                     │ Async REST API
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Local Server (FastAPI + Uvicorn + httpx)                                │
+│   • /api/generate • /api/presets • /api/history • /api/metadata        │
+│   • Local image saving & history indexing in generated_images/          │
+└────────────────────────────────────┬────────────────────────────────────┘
+                                     │ Typed JSON POST
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Modal Inference Service (text2image.py)                                 │
+│   • Pydantic Request / Response Validation                              │
+│   • Diffusers SDXL Pipeline + PyTorch SDPA                              │
+│   • A1111-style Dual-CLIP Prompt Chunking (Preserved)                   │
+│   • Multi-LoRA Fusion & CivitAI Cache Volume                            │
+│   • PNG tEXt Metadata Injection                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🚀 Quick Start
+
+### 1. Prerequisites
+
+- Python 3.12+ (or 3.10+)
+- A [Modal](https://modal.com) account
+- (Optional) A [CivitAI](https://civitai.com) account and API token for downloading restricted models/LoRAs
+
+### 2. Installation
+
+Clone the repository and install dependencies:
+
+```bash
+git clone https://github.com/kirin-3/modal-sdxl
+cd modal-sdxl
+pip install -r requirements.txt
+```
+
+### 3. Configure Modal & CivitAI Token
+
+Authenticate the Modal CLI:
+
+```bash
+modal setup
+```
+
+Create your CivitAI API token secret in Modal (required for CivitAI downloads):
+
+```bash
+modal secret create civitai-token CIVITAI_TOKEN="your_civitai_api_token"
+```
+
+### 4. Deploy to Modal
+
+Deploy the single-file Modal inference application:
+
+```bash
+modal deploy text2image.py
+```
+
+Copy the deployed endpoint URL (e.g., `https://<username>--text2image-inference-generate.modal.run`).
+
+### 5. Configure Local Environment
+
+Copy the example environment file:
+
+```bash
+cp example.env .env
+```
+
+Edit `.env` and set your `MODAL_ENDPOINT`:
+
+```env
+MODAL_ENDPOINT=https://<your-username>--text2image-inference-generate.modal.run
+GPU_TYPE=L4
+HOST=0.0.0.0
+PORT=5000
+```
+
+### 6. Start the Local Server
+
+```bash
 python local_server.py
 ```
 
-Visit `http://localhost:5000` in your browser to access the web interface.
+Open [http://localhost:5000](http://localhost:5000) in your browser.
 
-## Using the Web Interface
+---
 
-The web interface provides access to all features through an intuitive UI:
+## 🎨 Web Interface Features
 
-1. **Prompts**: Enter your positive and negative prompts
-2. **Model Selection**: Choose between Hugging Face models or CivitAI models
-3. **Image Settings**: Control dimensions, steps, guidance scale, and other parameters
-4. **LoRA Integration**: Add up to 5 LoRAs to customize your generation
-5. **Batch Generation**: Generate multiple images at once
+- **Prompt Studio**: Enter positive and negative prompts. Supports Automatic1111 token weighting syntax and chunked prompts of any length.
+- **Style Presets**: One-click style defaults for *Photorealistic*, *Cinematic Film*, *Anime / Manga*, *Digital Painting*, and *Cyberpunk Neon*.
+- **Drag & Drop PNG Loader**: Drag any generated PNG image onto the prompt area to instantly load its prompt, seed, sampler, steps, CFG, and LoRAs.
+- **LoRA Manager**: Add up to 5 LoRAs from CivitAI (`civitai:<ID>`) or Hugging Face (`hf:<repo>/<file>`) with custom weights.
+- **Lightbox Gallery**: Click any thumbnail in the gallery to open a full-resolution inspection modal with zoom, download, prompt copying, and parameter reuse.
+- **History Drawer**: Access previously generated images and their full metadata directly from the slide-out history panel.
 
-Generated images are automatically saved to the `generated_images` directory.
+---
 
-## API Usage
+## 📡 Programmatic API
 
-The Modal app exposes an API endpoint that can be called programmatically:
+The Modal application exposes a typed JSON POST endpoint:
 
 ```python
 import requests
 import json
-import base64
-from PIL import Image
-import io
 
-# Prepare the request
-url = "https://yourusername--text2image-web.modal.run"
-params = {
-    "prompt": "A photorealistic landscape, breathtaking vista, 8k, highly detailed",
-    "negative_prompt": "cartoon, animation, drawing, low quality, blurry, nsfw",
+url = "https://yourusername--text2image-inference-generate.modal.run"
+
+payload = {
+    "prompt": "A breathtaking cinematic landscape, misty mountains, golden hour, 8k, photorealistic",
+    "negative_prompt": "cartoon, low quality, blurry, watermark",
     "width": 1024,
     "height": 1024,
-    "steps": 30,
+    "num_inference_steps": 30,
     "guidance_scale": 7.5,
+    "scheduler": "euler_ancestral",
     "batch_size": 1,
     "batch_count": 1,
-    "scheduler": "euler_ancestral"
+    "loras": [
+        {"model_id": "civitai:1681903", "weight": 2.0},
+        {"model_id": "civitai:1764869", "weight": 0.75}
+    ],
+    "freeu": {
+        "enabled": False,
+        "b1": 1.3,
+        "b2": 1.4,
+        "s1": 0.9,
+        "s2": 0.2
+    }
 }
 
-# Optional: Add LoRAs
-loras = [
-    {"model_id": "civitai:1681903", "weight": 2.0},
-    {"model_id": "civitai:1764869", "weight": 0.75}
-]
-params["loras"] = json.dumps(loras)
+response = requests.post(url, json=payload)
+data = response.json()
 
-# Make the request
-response = requests.get(url, params=params)
-
-# For a single image response
-if response.headers.get('content-type') == 'image/png':
-    img = Image.open(io.BytesIO(response.content))
-    img.save("generated_image.png")
-    img.show()
-# For a batch of images in JSON response
-elif 'application/json' in response.headers.get('content-type', ''):
-    data = response.json()
-    for i, b64_img in enumerate(data.get('images', [])):
-        img_bytes = base64.b64decode(b64_img)
-        img = Image.open(io.BytesIO(img_bytes))
-        img.save(f"generated_image_{i+1}.png")
+print(f"Generated {len(data['images'])} image(s) in {data['duration_seconds']}s")
 ```
 
-## Advanced Configuration
+---
 
-### Available Models
+## 🧪 CLI Testing
 
-- Default model: `stabilityai/stable-diffusion-xl-base-1.0`
-- You can use any SDXL model from Hugging Face or CivitAI
-- For CivitAI models, use the model ID from the Download URL (e.g., `1759168` from `https://civitai.com/api/download/models/1759168?type=Model&format=SafeTensor&size=full&fp=fp16`)
+You can also generate images directly from the command line using Modal's local entrypoint:
 
-### LoRA Configuration
+```bash
+modal run text2image.py --prompt "A photorealistic portrait of an astronaut on Mars, 8k" --steps 30
+```
 
-LoRAs allow you to customize the generation style without fine-tuning the entire model:
+Images will be saved to `./generated_images/`.
 
-- For CivitAI LoRAs: Use format `civitai:MODEL_ID` with the model ID from the URL
-- For Hugging Face LoRAs: Use format `hf:REPO_ID/PATH` for specific files or `hf:REPO_ID` to auto-detect
+---
 
-The `weight` parameter (0.1-2.0) controls how strongly the LoRA affects the generation.
+## 📜 License
 
-### Scheduler Options
-
-- `euler_ancestral`: Euler Ancestral - Best overall, default choice
-- `dpmpp_2m_karras`: DPM++ 2M Karras - High quality, potentially faster
-
-## Troubleshooting
-
-### Common Issues
-
-1. **"Error from Modal API"**: Ensure your Modal account is set up correctly and the application is deployed
-2. **Request Timeouts**: First-time generations can take longer due to model downloads. Subsequent generations will be faster.
-3. **Memory Issues**: Reduce batch size, image dimensions, or the number of LoRAs if you encounter CUDA out-of-memory errors
-4. **Missing LoRA Effects**: Verify the LoRA ID is correct and try increasing the weight value
-5. **CivitAI Access Issues**: Make sure you've created the `civitai-token` secret in Modal with a valid API token
-
-### Advanced Users
-
-For advanced customization, you can modify:
-
-- The schedulers in `text2image.py` to add more sampling options
-- The chunking logic in `_encode_prompt_chunked` function to handle even longer prompts
-- The pipeline parameters for different generation settings
-- GPU configuration in `.env` to optimize for cost or performance
-
-## Acknowledgments
-
-- [Stability AI](https://stability.ai/) for Stable Diffusion XL
-- [Modal](https://modal.com/) for the serverless compute platform
-- [Hugging Face](https://huggingface.co/) for the Diffusers library
-- [CivitAI](https://civitai.com/) for the community models repository 
+MIT

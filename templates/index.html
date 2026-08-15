@@ -3,401 +3,313 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SDXL Image Generator</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
-    <!-- Add preload for critical resources -->
-    <link rel="preload" href="{{ url_for('static', filename='js/script.js') }}" as="script">
-    <link rel="preload" href="{{ url_for('static', filename='css/styles.css') }}" as="style">
+    <title>SDXL Studio | Modal Fast Generator</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <!-- Prompt History Panel -->
-        <div id="history-panel">
-            <div class="history-panel-header">
-                <h3>Prompt History</h3>
-                <button id="history-close-btn" class="history-close-btn" aria-label="Close history panel">&times;</button>
-            </div>
-            <div id="prompt-history-container"></div>
-        </div>
-        <!-- Toggle button for history panel -->
-        <div id="history-toggle" title="Prompt History">📋</div>
+    <!-- App Container -->
+    <div class="app-layout">
         
-        <h1>SDXL Image Generator</h1>
-        
-        {% if error %}
-        <div class="error" role="alert" aria-live="assertive">
-            <span class="sr-only">Error: </span>{{ error }}
-        </div>
-        {% endif %}
-        
-        <!-- Display flash messages -->
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                <div class="flash-message {{ category }}" role="alert" aria-live="polite">
-                    {{ message }}
-                </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-        
-        <!-- Display generated images first (at the top) -->
-        {% if saved_paths and saved_paths|length > 0 %}
-        <div class="image-container" id="result">
-            <h2>Generated Images</h2>
-            
-            <!-- Multiple image case - only show gallery -->
-            {% if saved_paths|length > 1 %}
-            <div>
-                <h3>Generated Images ({{ saved_paths|length }} total)</h3>
-                <div class="gallery">
-                    {% for filename in image_filenames %}
-                    <div class="gallery-item" data-index="{{ loop.index }}">
-                        <!-- Add loading="lazy" to all images -->
-                        <img src="{{ url_for('get_image', filename=filename) }}" alt="Generated image {{ loop.index }}" class="gallery-img" onclick="enlargeImage(this)" loading="lazy">
-                    </div>
-                    {% endfor %}
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-left">
+                <div class="logo-mark">⚡</div>
+                <div>
+                    <h1>SDXL Studio</h1>
+                    <span class="subtitle">Modern Modal Serverless Engine</span>
                 </div>
             </div>
-            <!-- Single image case - show main image -->
-            {% else %}
-            <img src="{{ url_for('get_image', filename=image_filenames[0]) }}" alt="Generated image">
-            {% endif %}
+            <div class="header-right">
+                <button id="history-toggle-btn" class="btn btn-secondary" title="View Generation History">
+                    <span>📜</span> History
+                </button>
+                <div class="status-badge" id="backend-status">
+                    <span class="status-dot"></span>
+                    <span id="status-text">Ready</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="workspace-grid">
             
-            <div class="generation-info">
-                <p>
-                    Using model: 
-                    <strong>
-                        {% if is_civitai %}
-                        CivitAI #{{ civitai_id }}
-                        <span class="tag tag-civitai">CivitAI</span>
-                        {% else %}
-                        {{ model_id }}
-                        <span class="tag tag-hf">HF</span>
-                        {% endif %}
-                    </strong>
-                </p>
-                <p>
-                    Settings: {{width}}×{{height}} pixels, {{steps}} steps, guidance scale {{guidance_scale}}
-                    {% if scheduler %}
-                    <br>
-                    Sampler: {{ scheduler_options[scheduler] if scheduler_options and scheduler in scheduler_options else scheduler }}
-                    {% endif %}
-                    {% if batch_size > 1 or batch_count > 1 %}
-                    <br>
-                    Batch: {{batch_size}} images per batch, {{batch_count}} batch(es)
-                    {% endif %}
-                </p>
+            <!-- Left Column: Prompts, Controls & Live Output -->
+            <section class="panel main-panel">
                 
-                <!-- Show where images were saved -->
-                {% if saved_paths and saved_paths|length > 0 %}
-                <div class="saved-paths">
-                    <p><strong>Images saved to disk:</strong></p>
-                    {% if saved_paths|length == 1 %}
-                        <p style="word-break: break-all;">{{ saved_paths[0] }}</p>
-                    {% else %}
-                        <p>{{ saved_paths|length }} images saved to <strong>{{ output_directory_display }}</strong> folder</p>
-                        <details>
-                            <summary>Show all file paths</summary>
-                            <div>
-                                <ul style="max-height: 150px; overflow-y: auto; text-align: left; margin-top: 10px;">
-                                    {% for path in saved_paths %}
-                                    <li style="word-break: break-all; margin-bottom: 5px;">{{ path }}</li>
-                                    {% endfor %}
-                                </ul>
-                            </div>
-                        </details>
-                    {% endif %}
+                <!-- Style Presets Bar -->
+                <div class="presets-bar">
+                    <span class="preset-label">Style Preset:</span>
+                    <select id="preset-selector" class="select-input">
+                        <option value="">Custom (No Preset)</option>
+                        {% for key, preset in presets.items() %}
+                        <option value="{{ key }}">{{ preset.name }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
-                {% endif %}
-            </div>
-        </div>
-        {% endif %}
-        
-        <!-- Modal for enlarged images -->
-        <div id="imageModal" class="modal">
-            <span class="close-modal" onclick="closeModal()">&times;</span>
-            <img class="modal-content" id="enlargedImage">
-        </div>
-        
-        <div class="loading" id="loading">
-            <p>Generating SDXL image... This may take a minute or longer for first-time model downloads.</p>
-            <div class="progress-bar">
-                <div class="progress-fill" id="progress-fill"></div>
-            </div>
-            <div id="time-estimate">Please wait... Connection active</div>
-        </div>
-        
-        <form method="POST" action="/" id="generate-form">
-            <div class="form-container">
-                <!-- Left column - Prompt and generation settings -->
-                <div class="primary-column">
-                    <div class="panel">
-                        <div class="prompt-container">
-                            <label for="prompt">Positive Prompt:</label>
-                            <textarea id="prompt" name="prompt" required placeholder="A photorealistic landscape, breathtaking vista, 8k, highly detailed">{{ prompt }}</textarea>
+
+                <!-- Prompt Inputs with Dropzone -->
+                <div class="prompt-dropzone" id="prompt-dropzone">
+                    <div class="drop-overlay" id="drop-overlay">
+                        <span>📥 Drop PNG image here to load parameters</span>
+                    </div>
+
+                    <div class="form-group">
+                        <div class="label-row">
+                            <label for="prompt">Positive Prompt</label>
+                            <span class="tip">Supports A1111 weights & multi-chunk tokens</span>
                         </div>
-                        
-                        <div class="prompt-container">
-                            <label for="negative_prompt">Negative Prompt:</label>
-                            <textarea id="negative_prompt" name="negative_prompt" placeholder="cartoon, animation, drawing, low quality, blurry, nsfw">{{ negative_prompt }}</textarea>
+                        <textarea id="prompt" rows="4" class="textarea-input" placeholder="A breathtaking cinematic landscape, misty mountains, golden hour lighting, photorealistic, 8k..." required></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <div class="label-row">
+                            <label for="negative_prompt">Negative Prompt</label>
+                            <button type="button" class="text-btn" id="default-neg-btn">Insert Default</button>
                         </div>
-                        
-                        <!-- Generate button -->
-                        <div style="text-align: center; margin-top: 15px;">
-                            <button type="submit" id="generate-btn" class="generate-btn">Generate Image</button>
-                        </div>
+                        <textarea id="negative_prompt" rows="2" class="textarea-input" placeholder="blurry, low quality, cartoon, deformed, bad anatomy, watermark..."></textarea>
+                    </div>
+                </div>
+
+                <!-- Primary Action Bar -->
+                <div class="action-bar">
+                    <button type="button" id="generate-btn" class="btn btn-primary">
+                        <span class="btn-icon">⚡</span>
+                        <span id="generate-btn-text">Generate Image</span>
+                        <span class="shortcut-hint">Ctrl+Enter</span>
+                    </button>
+                </div>
+
+                <!-- Progress & Status Indicator -->
+                <div class="generation-progress" id="progress-container" style="display: none;">
+                    <div class="progress-info">
+                        <span id="progress-status">Generating on Modal GPU...</span>
+                        <span id="progress-timer">0.0s</span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-indeterminate" id="progress-bar"></div>
+                    </div>
+                </div>
+
+                <!-- Generated Image Results View -->
+                <div class="result-section" id="result-section">
+                    <div class="section-header">
+                        <h2>Output Gallery</h2>
+                        <span id="result-summary" class="summary-text">No images generated yet</span>
                     </div>
                     
-                    <div class="panel">
-                        <details open>
-                            <summary>Generation Settings</summary>
-                            <div>
-                                <div>
-                                    <label for="seed">Seed (optional):</label>
-                                    <input type="number" id="seed" name="seed" value="{{ seed }}" placeholder="Leave empty for random seed">
-                                </div>
-                                
-                                <label>Image Dimensions:</label>
-                                <div>
-                                    <div style="margin-bottom: 10px;">
-                                        <span class="dimensions-preset" onclick="setDimensions(1024, 1024)">1024×1024</span>
-                                        <span class="dimensions-preset" onclick="setDimensions(896, 1152)">896×1152</span>
-                                        <span class="dimensions-preset" onclick="setDimensions(1152, 896)">1152×896</span>
-                                        <span class="dimensions-preset" onclick="setDimensions(1216, 832)">1216×832</span>
-                                        <span class="dimensions-preset" onclick="setDimensions(832, 1216)">832×1216</span>
-                                    </div>
-                                    <div class="dimensions-group">
-                                        <div class="dimension-input">
-                                            <label for="width">Width:</label>
-                                            <input type="number" id="width" name="width" value="{{ width }}" min="512" max="2048" step="8" required>
-                                        </div>
-                                        <div class="dimension-input">
-                                            <label for="height">Height:</label>
-                                            <input type="number" id="height" name="height" value="{{ height }}" min="512" max="2048" step="8" required>
-                                        </div>
-                                    </div>
-                                </div>
-                                
-                                <div>
-                                    <label for="steps">Inference Steps:</label>
-                                    <input type="number" id="steps" name="steps" value="{{ steps }}" min="1" max="100" placeholder="Number of denoising steps">
-                                    <small>More steps = better quality but slower generation. 25-40 steps usually gives good results.</small>
-                                </div>
-                                
-                                <div>
-                                    <label for="guidance_scale">Guidance Scale:</label>
-                                    <input type="number" id="guidance_scale" name="guidance_scale" value="{{ guidance_scale }}" min="1" max="20" step="0.1">
-                                    <small>How closely to follow the prompt. Higher values = more prompt adherence, less variety. Recommended range: 5-9</small>
-                                </div>
-                                
-                                <div>
-                                    <label for="clip_skip">CLIP Skip:</label>
-                                    <input type="number" id="clip_skip" name="clip_skip" value="{{ clip_skip }}" min="1" max="4" step="1" placeholder="Default: 1 (no skip)">
-                                    <small>Skip the last N layers of the CLIP text encoder. Some models work better with specific CLIP skip values. 1 = no skip, usually 2 works best for custom models if needed.</small>
-                                </div>
-                                
-                                <div>
-                                    <label for="scheduler">Sampling Method:</label>
-                                    <select id="scheduler" name="scheduler">
-                                        {% for id, name in scheduler_options.items() %}
-                                        <option value="{{ id }}" {% if scheduler == id %}selected{% endif %}>{{ name }}</option>
-                                        {% endfor %}
-                                    </select>
-                                    <small>Sampling algorithm used for image generation. Different samplers produce different results and have different speed/quality tradeoffs.</small>
-                                </div>
-                                
-                                <div class="settings-footer">
-                                    <div>
-                                        <label>Batch Generation:</label>
-                                        
-                                        <div class="batch-settings">
-                                            <div class="batch-column">
-                                                <label for="batch_size">Images per batch:</label>
-                                                <input type="number" id="batch_size" name="batch_size" value="{{ batch_size }}" min="1" max="4" step="1">
-                                                <small>Number of images to generate in parallel (1-4)</small>
-                                            </div>
-                                            <div class="batch-column">
-                                                <label for="batch_count">Number of batches:</label>
-                                                <input type="number" id="batch_count" name="batch_count" value="{{ batch_count }}" min="1" max="4" step="1">
-                                                <small>Total batches to run (1-4). Total images = batch size × batches</small>
-                                            </div>
-                                        </div>
-                                        
-                                        <!-- Dynamic total images counter -->
-                                        <p id="total-images-info" style="margin-top: 8px; font-weight: bold; color: #4CAF50;"></p>
-                                    </div>
-                                </div>
-                            </div>
-                        </details>
+                    <div class="gallery-grid" id="gallery-grid">
+                        <div class="empty-placeholder">
+                            <div class="placeholder-icon">🎨</div>
+                            <p>Enter a prompt and click <strong>Generate</strong> to create images.</p>
+                            <p class="sub-placeholder">You can also drag and drop previously generated PNGs anywhere to restore their exact settings.</p>
+                        </div>
                     </div>
                 </div>
-                
-                <!-- Right column - Model selection and LoRA -->
-                <div class="secondary-column">
-                    <div class="panel">
-                        <div class="model-sources">
-                            <label>Select model source:</label>
-                            
-                            <div class="model-option">
-                                <input type="radio" id="source-hf" name="model_source" value="huggingface" {% if not is_civitai and not force_civitai %}checked{% endif %} onclick="toggleModelSource('huggingface')">
-                                <label for="source-hf" style="display: inline;">Hugging Face SDXL Models</label>
+            </section>
+
+            <!-- Right Column: Settings & Model Configuration -->
+            <aside class="panel config-panel">
+                <div class="config-scroll">
+                    
+                    <!-- Model Selection Card -->
+                    <div class="config-card">
+                        <div class="card-header">
+                            <h3>Model Source</h3>
+                        </div>
+                        <div class="tab-group">
+                            <button type="button" class="tab-btn active" data-source="huggingface" id="tab-hf">Hugging Face</button>
+                            <button type="button" class="tab-btn" data-source="civitai" id="tab-civitai">CivitAI</button>
+                        </div>
+
+                        <div class="form-group" id="group-hf">
+                            <label for="model_id">Model ID</label>
+                            <input type="text" id="model_id" class="text-input" value="{{ default_model }}" placeholder="stabilityai/stable-diffusion-xl-base-1.0">
+                        </div>
+
+                        <div class="form-group" id="group-civitai" style="display: none;">
+                            <label for="civitai_id">CivitAI Model ID</label>
+                            <input type="text" id="civitai_id" class="text-input" placeholder="e.g. 135867 or 1637364">
+                            <small class="help-text">SDXL Checkpoint ID from the CivitAI URL.</small>
+                        </div>
+                    </div>
+
+                    <!-- Generation Parameters Card -->
+                    <div class="config-card">
+                        <div class="card-header">
+                            <h3>Generation Settings</h3>
+                        </div>
+
+                        <!-- Dimensions -->
+                        <div class="form-group">
+                            <label>Image Size</label>
+                            <div class="dimensions-presets">
+                                <button type="button" class="pill-btn active" data-w="1024" data-h="1024">1:1 (1024²)</button>
+                                <button type="button" class="pill-btn" data-w="896" data-h="1152">3:4 (896×1152)</button>
+                                <button type="button" class="pill-btn" data-w="1152" data-h="896">4:3 (1152×896)</button>
+                                <button type="button" class="pill-btn" data-w="832" data-h="1216">9:16 (832×1216)</button>
+                                <button type="button" class="pill-btn" data-w="1216" data-h="832">16:9 (1216×832)</button>
                             </div>
-                            
-                            <div class="model-option">
-                                <input type="radio" id="source-civitai" name="model_source" value="civitai" {% if is_civitai or force_civitai %}checked{% endif %} onclick="toggleModelSource('civitai')">
-                                <label for="source-civitai" style="display: inline;">CivitAI SDXL Models</label>
+                            <div class="row-inputs">
+                                <div class="col">
+                                    <label for="width">Width</label>
+                                    <input type="number" id="width" class="text-input" value="{{ default_width }}" min="512" max="2048" step="8">
+                                </div>
+                                <div class="col">
+                                    <label for="height">Height</label>
+                                    <input type="number" id="height" class="text-input" value="{{ default_height }}" min="512" max="2048" step="8">
+                                </div>
                             </div>
                         </div>
-                        
-                        <!-- Hugging Face model options -->
-                        <div id="huggingface-options" class="model-panel" {% if not is_civitai and not force_civitai %}style="display: block"{% else %}style="display: none"{% endif %}>
-                            <div class="info-box hf-info">
-                                <p>You can use any Hugging Face SDXL model. If not specified, the default model ({{ default_model }}) will be used.</p>
-                            </div>
-                            
-                            <div>
-                                <label for="model_id">SDXL Model ID:</label>
-                                <input type="text" id="model_id" name="model_id" value="{% if not is_civitai %}{{ model_id }}{% endif %}" placeholder="e.g., stabilityai/stable-diffusion-xl-base-1.0">
-                            </div>
+
+                        <!-- Sampler & Steps -->
+                        <div class="form-group">
+                            <label for="scheduler">Sampling Method</label>
+                            <select id="scheduler" class="select-input">
+                                {% for id, name in schedulers.items() %}
+                                <option value="{{ id }}" {% if id == default_scheduler %}selected{% endif %}>{{ name }}</option>
+                                {% endfor %}
+                            </select>
                         </div>
-                        
-                        <!-- CivitAI model options -->
-                        <div id="civitai-options" class="model-panel" {% if is_civitai or force_civitai %}style="display: block"{% else %}style="display: none"{% endif %}>
-                            <div class="info-box civitai-info">
-                                <p>Enter the CivitAI model ID from the URL. Make sure to select an SDXL model version. For example, if the model URL is 'https://civitai.com/api/download/models/997426?type=Model&format=SafeTensor', the ID is '997426'.</p>
+
+                        <div class="form-group">
+                            <div class="label-row">
+                                <label for="steps">Sampling Steps</label>
+                                <span class="val-badge" id="steps-val">{{ default_steps }}</span>
                             </div>
-                            
-                            <div>
-                                <label for="civitai_id">CivitAI SDXL Model ID:</label>
-                                <input type="text" id="civitai_id" name="civitai_id" value="{{ civitai_id|default('1637364') }}" placeholder="e.g., 135867" {% if is_civitai or force_civitai %}required{% endif %}>
+                            <input type="range" id="steps" min="15" max="80" step="1" value="{{ default_steps }}" class="range-input">
+                        </div>
+
+                        <div class="form-group">
+                            <div class="label-row">
+                                <label for="guidance_scale">CFG Guidance Scale</label>
+                                <span class="val-badge" id="guidance-val">{{ default_guidance_scale }}</span>
+                            </div>
+                            <input type="range" id="guidance_scale" min="1.0" max="15.0" step="0.5" value="{{ default_guidance_scale }}" class="range-input">
+                        </div>
+
+                        <!-- Seed & Batch -->
+                        <div class="form-group">
+                            <div class="label-row">
+                                <label for="seed">Seed</label>
+                                <button type="button" class="text-btn" id="randomize-seed-btn">🎲 Random</button>
+                            </div>
+                            <input type="number" id="seed" class="text-input" placeholder="Leave blank for random seed">
+                        </div>
+
+                        <div class="row-inputs">
+                            <div class="col">
+                                <label for="batch_size">Batch Size</label>
+                                <input type="number" id="batch_size" class="text-input" min="1" max="4" value="1">
+                            </div>
+                            <div class="col">
+                                <label for="batch_count">Batch Count</label>
+                                <input type="number" id="batch_count" class="text-input" min="1" max="4" value="1">
                             </div>
                         </div>
                     </div>
-                    
-                    <div class="panel">
-                        <!-- Always expanded LoRA Settings (no details/summary) -->
-                        <h3 style="margin-top: 0; padding: 10px 15px; background-color: #2c3651; color: #ffffff; border-radius: 6px;">LoRA Settings</h3>
-                        <div>
-                            <div class="info-box" style="background-color: rgba(76, 175, 80, 0.1); border-left: 5px solid #4CAF50;">
-                                <p>Add up to 5 LoRAs from either HuggingFace or CivitAI. For CivitAI, use the model ID from the URL. For HuggingFace, use the repository name.</p>
-                            </div>
-                            
-                            <!-- LoRA 1 - Pre-checked with preset values -->
-                            <div class="lora-container">
-                                <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                                    <input type="checkbox" id="lora1_enabled" name="lora1_enabled" {% if loras|length >= 1 and loras[0] %}checked{% else %}checked{% endif %} style="margin-right: 10px;">
-                                    <label for="lora1_enabled" style="display: inline; margin-bottom: 0;">Enable LoRA 1</label>
-                                </div>
-                                
-                                <div style="margin-left: 25px;">
-                                    <div style="margin-bottom: 10px;">
-                                        <label>LoRA Source:</label>
-                                        <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                                            <input type="radio" id="lora1_civitai" name="lora1_source" value="civitai" checked>
-                                            <label for="lora1_civitai" style="display: inline; font-weight: normal; margin: 0 15px 0 5px;">CivitAI</label>
-                                            
-                                            <input type="radio" id="lora1_hf" name="lora1_source" value="huggingface">
-                                            <label for="lora1_hf" style="display: inline; font-weight: normal; margin: 0 0 0 5px;">Hugging Face</label>
-                                        </div>
-                                    </div>
-                                    
-                                    <div>
-                                        <label for="lora1_id">LoRA ID:</label>
-                                        <input type="text" id="lora1_id" name="lora1_id" value="{% if loras|length >= 1 and loras[0].model_id %}{{ loras[0].model_id|replace('civitai:', '')|replace('hf:', '') }}{% else %}1681903{% endif %}" placeholder="e.g., 123456 (CivitAI) or repo/path (HF)">
-                                    </div>
-                                    
-                                    <div>
-                                        <label for="lora1_weight">Weight:</label>
-                                        <input type="number" id="lora1_weight" name="lora1_weight" value="{% if loras|length >= 1 and loras[0].weight %}{{ loras[0].weight }}{% else %}2.0{% endif %}" min="0.1" max="2" step="0.05" placeholder="0.1-2.0">
-                                        <small>How strongly to apply this LoRA. Higher values = stronger effect. Range: 0.1-2.0</small>
-                                    </div>
-                                    
 
-                                </div>
-                            </div>
-                            
-                            <!-- LoRA 2 - Pre-checked with preset values -->
-                            <div class="lora-container">
-                                <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                                    <input type="checkbox" id="lora2_enabled" name="lora2_enabled" {% if loras|length >= 2 and loras[1] %}checked{% else %}checked{% endif %} style="margin-right: 10px;">
-                                    <label for="lora2_enabled" style="display: inline; margin-bottom: 0;">Enable LoRA 2</label>
-                                </div>
-                                
-                                <div style="margin-left: 25px;">
-                                    <div style="margin-bottom: 10px;">
-                                        <label>LoRA Source:</label>
-                                        <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                                            <input type="radio" id="lora2_civitai" name="lora2_source" value="civitai" checked>
-                                            <label for="lora2_civitai" style="display: inline; font-weight: normal; margin: 0 15px 0 5px;">CivitAI</label>
-                                            
-                                            <input type="radio" id="lora2_hf" name="lora2_source" value="huggingface">
-                                            <label for="lora2_hf" style="display: inline; font-weight: normal; margin: 0 0 0 5px;">Hugging Face</label>
-                                        </div>
-                                    </div>
-                                    
-                                    <div>
-                                        <label for="lora2_id">LoRA ID:</label>
-                                        <input type="text" id="lora2_id" name="lora2_id" value="{% if loras|length >= 2 and loras[1].model_id %}{{ loras[1].model_id|replace('civitai:', '')|replace('hf:', '') }}{% else %}1764869{% endif %}" placeholder="e.g., 123456 (CivitAI) or repo/path (HF)">
-                                    </div>
-                                    
-                                    <div>
-                                        <label for="lora2_weight">Weight:</label>
-                                        <input type="number" id="lora2_weight" name="lora2_weight" value="{% if loras|length >= 2 and loras[1].weight %}{{ loras[1].weight }}{% else %}0.75{% endif %}" min="0.1" max="2" step="0.05" placeholder="0.1-2.0">
-                                        <small>How strongly to apply this LoRA. Higher values = stronger effect. Range: 0.1-2.0</small>
-                                    </div>
-                                    
-
-                                </div>
-                            </div>
-                            
-                            {% for i in range(3, 6) %}
-                            <div class="lora-container">
-                                <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                                    <input type="checkbox" id="lora{{ i }}_enabled" name="lora{{ i }}_enabled" {% if loras|length >= i and loras[i-1] %}checked{% endif %} style="margin-right: 10px;">
-                                    <label for="lora{{ i }}_enabled" style="display: inline; margin-bottom: 0;">Enable LoRA {{ i }}</label>
-                                </div>
-                                
-                                <div style="margin-left: 25px;">
-                                    <div style="margin-bottom: 10px;">
-                                        <label>LoRA Source:</label>
-                                        <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                                            <input type="radio" id="lora{{ i }}_civitai" name="lora{{ i }}_source" value="civitai" {% if loras|length >= i and loras[i-1].model_id and 'civitai:' in loras[i-1].model_id %}checked{% else %}checked{% endif %}>
-                                            <label for="lora{{ i }}_civitai" style="display: inline; font-weight: normal; margin: 0 15px 0 5px;">CivitAI</label>
-                                            
-                                            <input type="radio" id="lora{{ i }}_hf" name="lora{{ i }}_source" value="huggingface" {% if loras|length >= i and loras[i-1].model_id and 'hf:' in loras[i-1].model_id %}checked{% endif %}>
-                                            <label for="lora{{ i }}_hf" style="display: inline; font-weight: normal; margin: 0 0 0 5px;">Hugging Face</label>
-                                        </div>
-                                    </div>
-                                    
-                                    <div>
-                                        <label for="lora{{ i }}_id">LoRA ID:</label>
-                                        <input type="text" id="lora{{ i }}_id" name="lora{{ i }}_id" value="{% if loras|length >= i and loras[i-1].model_id %}{{ loras[i-1].model_id|replace('civitai:', '')|replace('hf:', '') }}{% endif %}" placeholder="e.g., 123456 (CivitAI) or repo/path (HF)">
-                                    </div>
-                                    
-                                    <div>
-                                        <label for="lora{{ i }}_weight">Weight:</label>
-                                        <input type="number" id="lora{{ i }}_weight" name="lora{{ i }}_weight" value="{% if loras|length >= i and loras[i-1].weight %}{{ loras[i-1].weight }}{% else %}0.75{% endif %}" min="0.1" max="2" step="0.05" placeholder="0.1-2.0">
-                                        <small>How strongly to apply this LoRA. Higher values = stronger effect. Range: 0.1-2.0</small>
-                                    </div>
-                                    
-
-                                </div>
-                            </div>
-                            {% endfor %}
+                    <!-- LoRA Adapters Card -->
+                    <div class="config-card">
+                        <div class="card-header">
+                            <h3>LoRA Adapters</h3>
+                            <button type="button" class="text-btn" id="add-lora-btn">+ Add LoRA</button>
                         </div>
+                        <div id="lora-container" class="lora-stack">
+                            <!-- Populated dynamically or preloaded -->
+                        </div>
+                    </div>
+
+                    <!-- Advanced Accordion -->
+                    <details class="config-card accordion-card">
+                        <summary class="card-header">
+                            <h3>Advanced Settings</h3>
+                            <span class="chevron">▼</span>
+                        </summary>
+                        <div class="accordion-content">
+                            <div class="form-group">
+                                <label for="clip_skip">CLIP Skip</label>
+                                <input type="number" id="clip_skip" class="text-input" min="1" max="4" placeholder="Default: 1 (no skip)">
+                                <small class="help-text">Skip final text encoder layers (often 2 for anime models).</small>
+                            </div>
+
+                            <div class="form-group checkbox-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="freeu_enabled">
+                                    <span>Enable FreeU (Fourier Enhancement)</span>
+                                </label>
+                            </div>
+
+                            <div id="freeu-params" style="display: none;" class="sub-params">
+                                <div class="row-inputs">
+                                    <div class="col">
+                                        <label for="freeu_b1">b1 (Backbone 1)</label>
+                                        <input type="number" id="freeu_b1" class="text-input" step="0.1" value="1.3">
+                                    </div>
+                                    <div class="col">
+                                        <label for="freeu_b2">b2 (Backbone 2)</label>
+                                        <input type="number" id="freeu_b2" class="text-input" step="0.1" value="1.4">
+                                    </div>
+                                </div>
+                                <div class="row-inputs">
+                                    <div class="col">
+                                        <label for="freeu_s1">s1 (Skip 1)</label>
+                                        <input type="number" id="freeu_s1" class="text-input" step="0.1" value="0.9">
+                                    </div>
+                                    <div class="col">
+                                        <label for="freeu_s2">s2 (Skip 2)</label>
+                                        <input type="number" id="freeu_s2" class="text-input" step="0.1" value="0.2">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <!-- History Drawer -->
+    <div class="drawer-overlay" id="history-overlay"></div>
+    <aside class="history-drawer" id="history-drawer">
+        <div class="drawer-header">
+            <h3>Generation History</h3>
+            <button type="button" class="close-btn" id="close-history-btn">&times;</button>
+        </div>
+        <div class="history-list" id="history-list">
+            <div class="empty-text">Loading history...</div>
+        </div>
+    </aside>
+
+    <!-- Lightbox Modal -->
+    <div class="lightbox-modal" id="lightbox-modal">
+        <div class="lightbox-backdrop" id="lightbox-backdrop"></div>
+        <div class="lightbox-container">
+            <button class="lightbox-close" id="lightbox-close">&times;</button>
+            <div class="lightbox-body">
+                <div class="lightbox-image-wrap">
+                    <img id="lightbox-img" src="" alt="Full resolution output">
+                </div>
+                <div class="lightbox-sidebar">
+                    <h4>Image Details</h4>
+                    <div class="lightbox-meta" id="lightbox-meta">
+                        <!-- Populated dynamically -->
+                    </div>
+                    <div class="lightbox-actions">
+                        <button class="btn btn-secondary btn-block" id="lightbox-copy-btn">📋 Copy Prompt</button>
+                        <button class="btn btn-secondary btn-block" id="lightbox-reuse-btn">🔄 Reuse Parameters</button>
+                        <a id="lightbox-download-link" class="btn btn-primary btn-block" download>💾 Download Image</a>
                     </div>
                 </div>
             </div>
-        </form>
-        
-        <!-- Add a Clear Form button for localStorage -->
-        <div style="text-align: center; margin-top: 20px; margin-bottom: 30px;">
-            <button id="clear-form-btn" style="background-color: #f44336;">Clear Saved Form Data</button>
         </div>
     </div>
 
-    <!-- Include JavaScript file - load at the end of body -->
-    <script src="{{ url_for('static', filename='js/script.js') }}" defer></script>
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <script src="/static/js/script.js"></script>
 </body>
-</html> 
+</html>

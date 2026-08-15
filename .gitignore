@@ -21,6 +21,8 @@ wheels/
 *.egg
 MANIFEST
 .kilocode/
+.agent/
+openspec/
 
 # Virtual environments
 venv/
